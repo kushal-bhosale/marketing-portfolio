@@ -1,2 +1,2 @@
 # marketing-portfolio
-Projects executed as a marketer
+Projects executed using Claude, n8n, Make, and other automation tools.
