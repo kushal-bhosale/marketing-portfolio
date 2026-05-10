@@ -1,0 +1,330 @@
+{
+  "name": "LI Posts copy_OpenAI",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -16,
+        0
+      ],
+      "id": "fba3021c-80cd-4dd8-9fe9-5a07f3481e18",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=AI+marketing+B2B+startup&hl=en-IN&gl=IN&ceid=IN:en",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        208,
+        0
+      ],
+      "id": "2ca61550-4938-4b23-a8f7-b30b95fc1aed",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        432,
+        0
+      ],
+      "id": "f7b36725-8fb3-4ed8-b305-8e62a16a393e",
+      "name": "XML"
+    },
+    {
+      "parameters": {
+        "maxItems": 5
+      },
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        656,
+        0
+      ],
+      "id": "75726754-6e0e-48f7-b814-a6ff5adb455c",
+      "name": "Limit"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -16,
+        320
+      ],
+      "id": "9c4cdac4-5dca-4161-86bb-f1b835dd2eea",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "sendTo": "kushal.bhosale2020@teachforindia.org",
+        "subject": "LinkedIn Post Content",
+        "message": "={{ $json.output[0].content[0].text }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        736,
+        320
+      ],
+      "id": "ab66f048-d25e-42ff-9fe9-8e2d1c5246fc",
+      "name": "Send a message",
+      "webhookId": "ca740420-8a0d-4b34-b537-55d2ef1b6df9",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "2cXOuuInjaIfwsmO",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=You are a content filter for a newsletter. From the articles below, pick the 2 most relevant for B2B startup founders and investors setting up one-person marketing functions using AI.\n\nSummarise each in 3 bullet points. Return ONLY a JSON array with keys: title, summary, url. No extra text, no markdown, no code blocks.\n\nHere are the articles:\n{{ $input.all().map(item => item.json.rss.channel.item).flat().map(a => `Title: ${a.title}\\nURL: ${a.link}`).join('\\n\\n') }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        864,
+        0
+      ],
+      "id": "20d2934e-0297-411a-863e-b0b76c025acf",
+      "name": "Message a model",
+      "credentials": {
+        "openAiApi": {
+          "id": "Pdg5Yhr4nTB7UAfD",
+          "name": "n8n free OpenAI API credits"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "={{ $json.system_prompt }}\n\nAudience: {{ $json.audience }}\nContent pillars: {{ $json.content_pillars }}\nChannel: {{ $json.channel }}\nMy role: {{ $json.role }}\n\nWriting rules to follow strictly:\n{{ $json.avoid }}\n\nCRITICAL CHECK: Before writing anything, re-read every rule above. Scan your output before submitting. If any banned word, phrase, or negative parallelism pattern appears, rewrite that sentence. The 3F rule is fatal.\n\nHere are today's articles:\n{{ $json.articles }}\n\nPick the 1 article that best fits my content pillars. Write a {{ $json.channel }} post (150-200 words) based on it.\n\nHook on first line. 2-4 lines of insight. End with a question or observation. No CTA. No hashtags.\nReturn only the post text. Nothing else."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        384,
+        320
+      ],
+      "id": "d604b788-c197-474d-aa66-fa847898824c",
+      "name": "Message a model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "Pdg5Yhr4nTB7UAfD",
+          "name": "n8n free OpenAI API credits"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": {
+          "__rl": true,
+          "value": "1e19a240-f770-4fd1-b5a5-cef4684f2997",
+          "mode": "list",
+          "cachedResultName": "Personas",
+          "cachedResultUrl": "https://www.notion.so/1e19a240f7704fd1b5a5cef4684f2997"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        1232,
+        0
+      ],
+      "id": "0b45470f-16d6-4369-ae3b-13a32ec50800",
+      "name": "Get many database pages",
+      "alwaysOutputData": true,
+      "credentials": {
+        "notionOAuth2Api": {
+          "id": "rqLtWnOUfPhvz8p1",
+          "name": "Notion OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst notion = items.find(i => i.json.property_system_prompt);\nconst openai = items.find(i => i.json.output);\n\nlet articles = '';\ntry {\n  const parsed = JSON.parse(openai.json.output[0].content[0].text);\n  articles = parsed.map(a => `Title: ${a.title}\\nSummary: ${a.summary.join(' ')}\\nURL: ${a.url}`).join('\\n\\n');\n} catch(e) {\n  articles = openai.json.output[0].content[0].text;\n}\n\nreturn [{\n  json: {\n    system_prompt: notion.json.property_system_prompt,\n    audience: notion.json.property_audience,\n    content_pillars: notion.json.property_content_pillars,\n    channel: notion.json.property_channel,\n    role: notion.json.property_role,\n    avoid: notion.json.property_avoid,\n    articles: articles\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        192,
+        320
+      ],
+      "id": "570c39fd-4c9e-44c5-821b-0088a9f2618c",
+      "name": "Code in JavaScript"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "XML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "XML": {
+      "main": [
+        [
+          {
+            "node": "Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Get many database pages",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Get many database pages": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Message a model1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model1": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionTimeout": -1
+  },
+  "versionId": "ba81438a-e936-4050-8a67-c009d684e12a",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "031400c3a00cb80d3b82c27f9545a172b225e1ea1cd59b975650e7e9dbc47410"
+  },
+  "id": "nUgAkjKDB9cgJi4n",
+  "tags": []
+}
