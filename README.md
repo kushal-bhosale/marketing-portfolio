@@ -20,6 +20,13 @@ Self-hostable automations built on [n8n](https://n8n.io) for content creation an
 |----------|-------------|------|
 | [LinkedIn Post Creator](./n8n-workflows/linkedin-post-creator/) | Generates LinkedIn-ready posts from raw inputs using AI, formatted for engagement | ~$20/mo (Claude) |
 
+### Content Systems
+Calibration layers that turn a general AI model into an on-brand, on-voice production partner — without prompt engineering gymnastics.
+
+| Project | Description |
+|---------|-------------|
+| [Finfactor Content System](./finfactor-content-system/) | A Claude project setup (ICP, voice samples, brand kit, anti-AI style guide, proof rules) that produces on-brand B2B Fintech content for Finfactor — brief-first, no generic AI copy |
+
 ---
 
 ## Tools & stack
