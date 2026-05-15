@@ -129,5 +129,5 @@ those files; it doesn't replace them.
 ## Built by
 
 Kushal Bhosale — marketing generalist, Finfactor.
-https://linkedin.com/in/kushalbhosale
+https://linkedin.com/in/kushal-bhosale
 https://www.kushalbhosale.com
