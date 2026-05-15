@@ -1,0 +1,20 @@
+# Local-only positioning context — never commit
+internal-context.md
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Misc
+Thumbs.db
+ehthumbs.db
+desktop.ini
