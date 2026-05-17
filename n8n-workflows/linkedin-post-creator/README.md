@@ -167,7 +167,7 @@ Trying to enforce the full Voice DNA inside Gemini Flash failed. Flash glazes ov
 >
 > If you're a founder hiring your first marketer in 2026, looking for a generalist operator may give you the best outcome. Someone who can synthesize the org goals, translate it to marketing goals, create a strategy, and run all of it with tools.
 >
-> What's your hiring style?
+> Are you still hiring specialists in 2026?
 
 ## What broke along the way
 
