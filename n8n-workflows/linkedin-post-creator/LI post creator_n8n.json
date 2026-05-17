@@ -1,5 +1,5 @@
 {
-  "name": "LI Posts copy_OpenAI",
+  "name": "LI Posts v2 - Multi-RSS with Dedup",
   "nodes": [
     {
       "parameters": {
@@ -14,25 +14,62 @@
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.3,
       "position": [
-        -16,
-        0
+        -2128,
+        -96
       ],
-      "id": "fba3021c-80cd-4dd8-9fe9-5a07f3481e18",
+      "id": "f56f9dd4-3b62-4b2c-aef0-9ca881bceab4",
       "name": "Schedule Trigger"
     },
     {
       "parameters": {
-        "url": "https://news.google.com/rss/search?q=AI+marketing+B2B+startup&hl=en-IN&gl=IN&ceid=IN:en",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "feed-list-001",
+              "name": "feeds",
+              "value": "={{ [\n  { name: 'AI Marketing B2B', url: 'https://news.google.com/rss/search?q=AI+marketing+B2B+startup+when:1d&hl=en-IN&gl=IN&ceid=IN:en' },\n  { name: 'Solo Marketing Function', url: 'https://news.google.com/rss/search?q=%22one+person+marketing%22+OR+%22solo+marketer%22+OR+%22lean+marketing+team%22+when:1d&hl=en-IN&gl=IN&ceid=IN:en' },\n  { name: 'Marketing Automation Startups', url: 'https://news.google.com/rss/search?q=marketing+automation+early+stage+startup+when:1d&hl=en-IN&gl=IN&ceid=IN:en' },\n  { name: 'B2B GTM Growth', url: 'https://news.google.com/rss/search?q=B2B+GTM+OR+%22go+to+market%22+startup+growth+when:1d&hl=en-IN&gl=IN&ceid=IN:en' },\n  { name: 'AI Tools for Marketers', url: 'https://news.google.com/rss/search?q=%22AI+tools%22+marketers+OR+%22AI+for+marketing%22+when:1d&hl=en-IN&gl=IN&ceid=IN:en' }\n] }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1920,
+        -96
+      ],
+      "id": "bbe98167-5489-4522-be5a-3d1a69757d23",
+      "name": "Define RSS Feeds"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "feeds",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -1696,
+        -96
+      ],
+      "id": "4d5fd070-29d6-4206-9d16-1f83f77bf784",
+      "name": "Split Into Feeds"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        208,
-        0
+        -1472,
+        -96
       ],
-      "id": "2ca61550-4938-4b23-a8f7-b30b95fc1aed",
-      "name": "HTTP Request"
+      "id": "f3afe32d-c517-4eca-910a-979bdc98fe28",
+      "name": "Fetch RSS"
     },
     {
       "parameters": {
@@ -41,124 +78,65 @@
       "type": "n8n-nodes-base.xml",
       "typeVersion": 1,
       "position": [
-        432,
-        0
+        -1248,
+        -96
       ],
-      "id": "f7b36725-8fb3-4ed8-b305-8e62a16a393e",
-      "name": "XML"
+      "id": "de4a50e9-3bce-4e05-92cf-99b66f039688",
+      "name": "Parse XML"
     },
     {
       "parameters": {
-        "maxItems": 5
+        "fieldToSplitOut": "rss.channel.item",
+        "options": {}
       },
-      "type": "n8n-nodes-base.limit",
+      "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
       "position": [
-        656,
-        0
+        -1040,
+        -96
       ],
-      "id": "75726754-6e0e-48f7-b814-a6ff5adb455c",
-      "name": "Limit"
-    },
-    {
-      "parameters": {},
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 3.2,
-      "position": [
-        -16,
-        320
-      ],
-      "id": "9c4cdac4-5dca-4161-86bb-f1b835dd2eea",
-      "name": "Merge"
+      "id": "49691718-4d75-4675-8b19-ee0f65d9ac3c",
+      "name": "Split Into Articles"
     },
     {
       "parameters": {
-        "sendTo": "kushal.bhosale2020@teachforindia.org",
-        "subject": "LinkedIn Post Content",
-        "message": "={{ $json.output[0].content[0].text }}",
-        "options": {}
+        "jsCode": "// Normalize each article: clean URL (strip tracking params), build hash, keep fields we need\nconst items = $input.all();\nconst out = [];\nfor (const item of items) {\n  const j = item.json || {};\n  const rawTitle = (j.title || '').toString().trim();\n  const rawLink = (j.link || '').toString().trim();\n  const rawDesc = (j.description || '').toString().trim();\n  if (!rawTitle || !rawLink) continue;\n\n  // Strip query params + trailing slash for stable matching\n  let cleanUrl = rawLink;\n  try {\n    const u = new URL(rawLink);\n    u.search = '';\n    u.hash = '';\n    cleanUrl = u.toString().replace(/\\/$/, '').toLowerCase();\n  } catch (e) {\n    cleanUrl = rawLink.toLowerCase();\n  }\n\n  // Title-based fallback hash (Google News rewrites URLs sometimes)\n  const titleKey = rawTitle.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\\s+/g, ' ').trim().slice(0, 120);\n\n  out.push({\n    json: {\n      title: rawTitle,\n      url: rawLink,\n      clean_url: cleanUrl,\n      title_key: titleKey,\n      description: rawDesc.slice(0, 500),\n      pubDate: j.pubDate || ''\n    }\n  });\n}\nreturn out;"
       },
-      "type": "n8n-nodes-base.gmail",
-      "typeVersion": 2.2,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
-        736,
-        320
+        -816,
+        -96
       ],
-      "id": "ab66f048-d25e-42ff-9fe9-8e2d1c5246fc",
-      "name": "Send a message",
-      "webhookId": "ca740420-8a0d-4b34-b537-55d2ef1b6df9",
-      "credentials": {
-        "gmailOAuth2": {
-          "id": "2cXOuuInjaIfwsmO",
-          "name": "Gmail OAuth2 API"
-        }
-      }
+      "id": "550d6bb7-201a-4a7a-b0cc-979625241e15",
+      "name": "Normalize Articles"
     },
     {
       "parameters": {
-        "modelId": {
-          "__rl": true,
-          "value": "gpt-4.1-mini",
-          "mode": "list",
-          "cachedResultName": "GPT-4.1-MINI"
-        },
-        "responses": {
-          "values": [
-            {
-              "content": "=You are a content filter for a newsletter. From the articles below, pick the 2 most relevant for B2B startup founders and investors setting up one-person marketing functions using AI.\n\nSummarise each in 3 bullet points. Return ONLY a JSON array with keys: title, summary, url. No extra text, no markdown, no code blocks.\n\nHere are the articles:\n{{ $input.all().map(item => item.json.rss.channel.item).flat().map(a => `Title: ${a.title}\\nURL: ${a.link}`).join('\\n\\n') }}"
-            }
-          ]
-        },
-        "builtInTools": {},
+        "aggregate": "aggregateAllItemData",
         "options": {}
       },
-      "type": "@n8n/n8n-nodes-langchain.openAi",
-      "typeVersion": 2.3,
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
       "position": [
-        864,
-        0
+        -592,
+        -96
       ],
-      "id": "20d2934e-0297-411a-863e-b0b76c025acf",
-      "name": "Message a model",
-      "credentials": {
-        "openAiApi": {
-          "id": "Pdg5Yhr4nTB7UAfD",
-          "name": "n8n free OpenAI API credits"
-        }
-      }
+      "id": "3a4e43d6-6f20-423b-9af5-db14c20b7ebb",
+      "name": "Collect All Articles"
     },
     {
       "parameters": {
-        "modelId": {
-          "__rl": true,
-          "value": "gpt-4.1-mini",
-          "mode": "list",
-          "cachedResultName": "GPT-4.1-MINI"
-        },
-        "responses": {
-          "values": [
-            {
-              "content": "={{ $json.system_prompt }}\n\nAudience: {{ $json.audience }}\nContent pillars: {{ $json.content_pillars }}\nChannel: {{ $json.channel }}\nMy role: {{ $json.role }}\n\nWriting rules to follow strictly:\n{{ $json.avoid }}\n\nCRITICAL CHECK: Before writing anything, re-read every rule above. Scan your output before submitting. If any banned word, phrase, or negative parallelism pattern appears, rewrite that sentence. The 3F rule is fatal.\n\nHere are today's articles:\n{{ $json.articles }}\n\nPick the 1 article that best fits my content pillars. Write a {{ $json.channel }} post (150-200 words) based on it.\n\nHook on first line. 2-4 lines of insight. End with a question or observation. No CTA. No hashtags.\nReturn only the post text. Nothing else."
-            }
-          ]
-        },
-        "builtInTools": {},
-        "options": {}
+        "jsCode": "// Dedupe within today's pull (by clean_url and title_key)\nconst all = $input.first().json.data || [];\nconst seenUrl = new Set();\nconst seenTitle = new Set();\nconst unique = [];\nfor (const a of all) {\n  if (seenUrl.has(a.clean_url) || seenTitle.has(a.title_key)) continue;\n  seenUrl.add(a.clean_url);\n  seenTitle.add(a.title_key);\n  unique.push(a);\n}\n// Cap at 20 to keep downstream cheap\nreturn unique.slice(0, 20).map(a => ({ json: a }));"
       },
-      "type": "@n8n/n8n-nodes-langchain.openAi",
-      "typeVersion": 2.3,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
-        384,
-        320
+        -368,
+        -96
       ],
-      "id": "d604b788-c197-474d-aa66-fa847898824c",
-      "name": "Message a model1",
-      "credentials": {
-        "openAiApi": {
-          "id": "Pdg5Yhr4nTB7UAfD",
-          "name": "n8n free OpenAI API credits"
-        }
-      }
+      "id": "936af129-9df8-43e8-971a-0f6a9b3a44db",
+      "name": "Dedupe Today's Pull"
     },
     {
       "parameters": {
@@ -167,21 +145,23 @@
         "operation": "getAll",
         "databaseId": {
           "__rl": true,
-          "value": "1e19a240-f770-4fd1-b5a5-cef4684f2997",
+          "value": "05269c66-0fd2-498e-8d23-e60e12829106",
           "mode": "list",
-          "cachedResultName": "Personas",
-          "cachedResultUrl": "https://www.notion.so/1e19a240f7704fd1b5a5cef4684f2997"
+          "cachedResultName": "Sent Articles DB",
+          "cachedResultUrl": "https://www.notion.so/05269c660fd2498e8d23e60e12829106"
         },
+        "limit": 100,
         "options": {}
       },
       "type": "n8n-nodes-base.notion",
       "typeVersion": 2.2,
       "position": [
-        1232,
-        0
+        -368,
+        128
       ],
-      "id": "0b45470f-16d6-4369-ae3b-13a32ec50800",
-      "name": "Get many database pages",
+      "id": "58dbab01-39ed-4610-b5c0-865ee8c1c9a5",
+      "name": "Get Sent History",
+      "executeOnce": true,
       "alwaysOutputData": true,
       "credentials": {
         "notionOAuth2Api": {
@@ -192,15 +172,241 @@
     },
     {
       "parameters": {
-        "jsCode": "const items = $input.all();\n\nconst notion = items.find(i => i.json.property_system_prompt);\nconst openai = items.find(i => i.json.output);\n\nlet articles = '';\ntry {\n  const parsed = JSON.parse(openai.json.output[0].content[0].text);\n  articles = parsed.map(a => `Title: ${a.title}\\nSummary: ${a.summary.join(' ')}\\nURL: ${a.url}`).join('\\n\\n');\n} catch(e) {\n  articles = openai.json.output[0].content[0].text;\n}\n\nreturn [{\n  json: {\n    system_prompt: notion.json.property_system_prompt,\n    audience: notion.json.property_audience,\n    content_pillars: notion.json.property_content_pillars,\n    channel: notion.json.property_channel,\n    role: notion.json.property_role,\n    avoid: notion.json.property_avoid,\n    articles: articles\n  }\n}];"
+        "jsCode": "// Build a Set of already-sent clean_urls and title_keys from Notion history.\n// Then filter today's candidate articles against that set.\n// If history fetch returned nothing, treat it as empty (first run case).\n\nlet history = [];\ntry {\n  history = $('Get Sent History').all() || [];\n} catch (e) {\n  history = [];\n}\n\nconst sentUrls = new Set();\nconst sentTitles = new Set();\nconst recentTopics = [];\n\nfor (const h of history) {\n  const props = (h.json && h.json.properties) || {};\n  // Defensive: Notion property shapes vary. Read both rich_text and title arrays.\n  const cu = props['Clean URL'];\n  const tk = props['Title Key'];\n  const tt = props['Title'];\n\n  const readText = (prop) => {\n    if (!prop) return '';\n    const arr = prop.rich_text || prop.title || [];\n    return arr.map(x => x.plain_text || '').join('').toLowerCase().trim();\n  };\n\n  const cuVal = readText(cu);\n  const tkVal = readText(tk);\n  const ttVal = readText(tt);\n\n  if (cuVal) sentUrls.add(cuVal);\n  if (tkVal) sentTitles.add(tkVal);\n  if (ttVal) recentTopics.push(ttVal);\n}\n\nconst candidates = $('Dedupe Today\\'s Pull').all().map(i => i.json);\nconst fresh = candidates.filter(c =>\n  !sentUrls.has(c.clean_url) && !sentTitles.has(c.title_key)\n);\n\n// Output a single item carrying the fresh list + recent topics (for the LLM to diversify against)\nreturn [{\n  json: {\n    fresh_count: fresh.length,\n    fresh_articles: fresh,\n    recent_topics: recentTopics.slice(0, 20)\n  }\n}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        192,
-        320
+        -160,
+        32
       ],
-      "id": "570c39fd-4c9e-44c5-821b-0088a9f2618c",
+      "id": "8024b777-7b16-4b28-9ac4-38d0248568dc",
+      "name": "Filter Out Already Sent"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-fresh-001",
+              "leftValue": "={{ $json.fresh_count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        80,
+        32
+      ],
+      "id": "e35d804f-3687-45b4-bc73-32d3d20390ad",
+      "name": "Any Fresh Articles?"
+    },
+    {
+      "parameters": {
+        "sendTo": "kushal.bhosale2020@teachforindia.org",
+        "subject": "No fresh content today (workflow ran successfully)",
+        "message": "Workflow ran but every article in today's pull across all 5 RSS feeds was already sent in the past week.\n\nThis is normal on slow news days. No post drafted.\n\n— LI Posts v2",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        288,
+        160
+      ],
+      "id": "48db12e5-b6ce-45ca-8330-f109e94769b5",
+      "name": "Send 'No Content' Email",
+      "webhookId": "no-content-webhook-001",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "2cXOuuInjaIfwsmO",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "database",
+        "databaseId": {
+          "__rl": true,
+          "value": "1e19a240-f770-4fd1-b5a5-cef4684f2997",
+          "mode": "list",
+          "cachedResultName": "Personas",
+          "cachedResultUrl": "https://www.notion.so/1e19a240f7704fd1b5a5cef4684f2997"
+        }
+      },
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        288,
+        -112
+      ],
+      "id": "80d0f77a-be30-4962-9a72-332e7201f36e",
+      "name": "Get Persona",
+      "credentials": {
+        "notionOAuth2Api": {
+          "id": "rqLtWnOUfPhvz8p1",
+          "name": "Notion OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You are picking one article for a LinkedIn post.\n\nAudience: {{ $('Get Persona').item.json.audience }}\nMy role: {{ $('Get Persona').item.json.role }}\nContent pillars: {{ $('Get Persona').item.json.content_pillars }}\n\nRecently posted topics (AVOID overlap with these, prefer fresh angles):\n{{ ($('Filter Out Already Sent').item.json.recent_topics || []).join(' | ') }}\n\nToday's fresh candidates:\n{{ ($('Filter Out Already Sent').item.json.fresh_articles || []).map((a, i) => `[${i}] Title: ${a.title}\\nURL: ${a.url}\\nDesc: ${a.description}`).join('\\n\\n') }}\n\nPick ONE article that:\n1. Best matches my content pillars\n2. Does NOT overlap with recently posted topics\n3. Has a non-obvious angle for a high-IC marketer\n\nReturn ONLY a JSON object (no markdown, no code blocks):\n{\"index\": <number>, \"title\": \"<title>\", \"url\": \"<url>\", \"clean_url\": \"<clean_url>\", \"title_key\": \"<title_key>\", \"reason\": \"<one sentence why>\"}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        512,
+        -112
+      ],
+      "id": "3351cbc4-adef-431b-8cd0-01e768e9f7fe",
+      "name": "Pick Best Article",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "8ePZ4qmnOKTDqzeo",
+          "name": "Google Gemini(PaLM) Api account 5"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Gemini's pick. Strip code fences if it ignored instructions.\nconst raw = ($input.first().json.content && $input.first().json.content.parts && $input.first().json.content.parts[0] && $input.first().json.content.parts[0].text) || '';\nlet clean = raw.trim();\nclean = clean.replace(/^```(?:json)?\\s*/i, '').replace(/```\\s*$/, '').trim();\n\nlet pick;\ntry {\n  pick = JSON.parse(clean);\n} catch (e) {\n  // Fallback: pick the first fresh article\n  const fresh = $('Filter Out Already Sent').first().json.fresh_articles || [];\n  if (fresh.length === 0) {\n    throw new Error('No fresh articles and Gemini pick failed to parse: ' + raw);\n  }\n  pick = {\n    index: 0,\n    title: fresh[0].title,\n    url: fresh[0].url,\n    clean_url: fresh[0].clean_url,\n    title_key: fresh[0].title_key,\n    reason: 'fallback: gemini pick failed to parse'\n  };\n}\n\n// Cross-reference back to the fresh list to grab description (Gemini doesn't echo it).\nconst fresh = $('Filter Out Already Sent').first().json.fresh_articles || [];\nconst matched = fresh.find(a => a.clean_url === pick.clean_url) || fresh[pick.index] || fresh[0];\n\nreturn [{\n  json: {\n    title: pick.title || matched.title,\n    url: pick.url || matched.url,\n    clean_url: pick.clean_url || matched.clean_url,\n    title_key: pick.title_key || matched.title_key,\n    description: matched.description || '',\n    reason: pick.reason || ''\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        -112
+      ],
+      "id": "0b696a95-ed33-40d1-b49e-aeed7dc56d06",
+      "name": "Parse Pick"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $('Get Persona').item.json.system_prompt }}\n\nHard rules to follow:\n{{ $('Get Persona').item.json.avoid }}\n\nArticle to base the post on:\nTitle: {{ $('Parse Pick').item.json.title }}\nURL: {{ $('Parse Pick').item.json.url }}\nSummary: {{ $('Parse Pick').item.json.description }}\n\nWrite a LinkedIn post (130-160 words).\n\nStructure:\n- Line 1: Hook. A specific fact, number, or observation from the article. Not a question. Not a generalisation.\n- Lines 2-5: Your take. What does this mean for the reader (founders / one-person marketing leads)? Be specific.\n- Final line: A question or observation that invites a reply.\n\nAlso generate a 6-8 word subject line angle (no source attribution, no quotes).\n\nReturn ONLY a JSON object (no markdown, no code blocks):\n{\"subject\": \"<6-8 word angle>\", \"body\": \"<the post>\"}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        960,
+        -112
+      ],
+      "id": "4d0c91a9-01f9-4570-ae5b-ddda2a33aefd",
+      "name": "Write Post",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "8ePZ4qmnOKTDqzeo",
+          "name": "Google Gemini(PaLM) Api account 5"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "kushal.bhosale2020@teachforindia.org",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.body }}\n\n---\nSource: {{ $('Parse Pick').item.json.url }}\nWhy picked: {{ $('Parse Pick').item.json.reason }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1536,
+        -112
+      ],
+      "id": "7a282654-aa64-4237-ac95-24d65ccbf174",
+      "name": "Send Post Email",
+      "webhookId": "send-post-webhook-001",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "2cXOuuInjaIfwsmO",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "database",
+        "databaseId": {
+          "__rl": true,
+          "value": "05269c66-0fd2-498e-8d23-e60e12829106",
+          "mode": "list",
+          "cachedResultName": "Sent Articles DB",
+          "cachedResultUrl": "https://www.notion.so/05269c660fd2498e8d23e60e12829106"
+        }
+      },
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        1824,
+        -112
+      ],
+      "id": "69dc4c5f-9c78-4358-8bc7-d1f89ebbc0e9",
+      "name": "Log to Sent Articles DB",
+      "executeOnce": true,
+      "credentials": {
+        "notionOAuth2Api": {
+          "id": "rqLtWnOUfPhvz8p1",
+          "name": "Notion OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = ($input.first().json.content?.parts?.[0]?.text) || '';\nlet clean = raw.trim().replace(/^```(?:json)?\\s*/i, '').replace(/```\\s*$/, '').trim();\n\nlet parsed;\ntry {\n  parsed = JSON.parse(clean);\n} catch (e) {\n  // Fallback if Gemini ignores JSON instruction\n  parsed = { subject: 'New angle', body: raw };\n}\n\nconst today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });\nreturn [{\n  json: {\n    subject: `LI Draft [${today}] — ${parsed.subject}`,\n    body: parsed.body\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1312,
+        -112
+      ],
+      "id": "b99a3de1-da37-42c1-b65d-3b5d22e654c4",
       "name": "Code in JavaScript"
     }
   ],
@@ -210,47 +416,169 @@
       "main": [
         [
           {
-            "node": "HTTP Request",
+            "node": "Define RSS Feeds",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "HTTP Request": {
+    "Define RSS Feeds": {
       "main": [
         [
           {
-            "node": "XML",
+            "node": "Split Into Feeds",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "XML": {
+    "Split Into Feeds": {
       "main": [
         [
           {
-            "node": "Limit",
+            "node": "Fetch RSS",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Limit": {
+    "Fetch RSS": {
       "main": [
         [
           {
-            "node": "Message a model",
+            "node": "Parse XML",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Merge": {
+    "Parse XML": {
+      "main": [
+        [
+          {
+            "node": "Split Into Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Into Articles": {
+      "main": [
+        [
+          {
+            "node": "Normalize Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Articles": {
+      "main": [
+        [
+          {
+            "node": "Collect All Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect All Articles": {
+      "main": [
+        [
+          {
+            "node": "Dedupe Today's Pull",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedupe Today's Pull": {
+      "main": [
+        [
+          {
+            "node": "Get Sent History",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Filter Out Already Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Out Already Sent": {
+      "main": [
+        [
+          {
+            "node": "Any Fresh Articles?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Fresh Articles?": {
+      "main": [
+        [
+          {
+            "node": "Get Persona",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send 'No Content' Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Persona": {
+      "main": [
+        [
+          {
+            "node": "Pick Best Article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Best Article": {
+      "main": [
+        [
+          {
+            "node": "Parse Pick",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Pick": {
+      "main": [
+        [
+          {
+            "node": "Write Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Post": {
       "main": [
         [
           {
@@ -261,27 +589,11 @@
         ]
       ]
     },
-    "Message a model": {
+    "Send Post Email": {
       "main": [
         [
           {
-            "node": "Get many database pages",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Merge",
-            "type": "main",
-            "index": 1
-          }
-        ]
-      ]
-    },
-    "Get many database pages": {
-      "main": [
-        [
-          {
-            "node": "Merge",
+            "node": "Log to Sent Articles DB",
             "type": "main",
             "index": 0
           }
@@ -292,18 +604,7 @@
       "main": [
         [
           {
-            "node": "Message a model1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Message a model1": {
-      "main": [
-        [
-          {
-            "node": "Send a message",
+            "node": "Send Post Email",
             "type": "main",
             "index": 0
           }
@@ -311,20 +612,15 @@
       ]
     }
   },
-  "active": true,
+  "active": false,
   "settings": {
     "executionOrder": "v1",
-    "binaryMode": "separate",
-    "availableInMCP": false,
-    "timeSavedMode": "fixed",
-    "callerPolicy": "workflowsFromSameOwner",
-    "executionTimeout": -1
+    "binaryMode": "separate"
   },
-  "versionId": "ba81438a-e936-4050-8a67-c009d684e12a",
+  "versionId": "2276a3b6-029a-4469-b2cf-76f605ff9c41",
   "meta": {
-    "templateCredsSetupCompleted": true,
     "instanceId": "031400c3a00cb80d3b82c27f9545a172b225e1ea1cd59b975650e7e9dbc47410"
   },
-  "id": "nUgAkjKDB9cgJi4n",
+  "id": "JJArzqjHPnCeYGOp",
   "tags": []
 }
