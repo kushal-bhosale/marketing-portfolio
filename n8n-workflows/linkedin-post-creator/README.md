@@ -165,9 +165,9 @@ Trying to enforce the full Voice DNA inside Gemini Flash failed. Flash glazes ov
 >
 > The economics are obvious. The pattern matters more. We're watching the marketing org compress, not because of AI hype, but because specialists optimise for craft and generalists optimise for outcomes. AI handles the craft.
 >
-> If you're a founder hiring your first marketer in 2026, the right profile isn't a content specialist or a paid specialist. It's someone who can read a P&L and run all of it with tools.
+> If you're a founder hiring your first marketer in 2026, looking for a generalist operator may give you the best outcome. Someone who can synthesize the org goals, translate it to marketing goals, create a strategy, and run all of it with tools.
 >
-> Are you still hiring marketing like it's 2019?
+> What's your hiring style?
 
 ## What broke along the way
 
