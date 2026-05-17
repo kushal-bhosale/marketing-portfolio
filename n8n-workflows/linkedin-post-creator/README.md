@@ -1,175 +1,207 @@
 # AI-Powered LinkedIn Content Workflow
 
-An automated n8n workflow that pulls relevant industry news, filters it using AI, and generates LinkedIn-ready posts in a specific human voice — delivered to your inbox daily.
-
----
+An automated n8n workflow that pulls multi-source industry news, deduplicates against past sends, generates a LinkedIn rough draft, and delivers it to your inbox daily. Final voice polish happens in a separate Claude voice project before publishing.
 
 ## What it does
 
-Runs on a schedule. No manual input needed.
+Runs daily at 7 AM IST. No manual input needed.
 
-1. Fetches articles from a Google News RSS feed targeting B2B startup and AI marketing content
-2. Parses the XML feed and extracts article titles and URLs
-3. Sends articles to GPT-4o to filter the 2 most relevant ones for the target audience
-4. Pulls persona data (voice rules, content pillars, audience, role) from a Notion database
-5. Merges everything into a single clean item via a Code node
-6. Sends the merged data to GPT-4o to write a LinkedIn post in the defined voice
-7. Delivers the post to your Gmail inbox for light editing before publishing
+1. Fetches articles from 5 Google News RSS feeds (all scoped to last 24 hours via `when:1d`)
+2. Normalises URLs, hashes titles, and deduplicates within today's pull
+3. Checks every candidate against a Notion "Sent Articles" database (past 7 days)
+4. If anything fresh remains: Gemini picks the best fit for the content pillars, actively avoiding recent topics
+5. Gemini writes a rough draft + a short subject line angle (returned as JSON)
+6. Sends the draft to your Gmail inbox with the format `LI Draft [DD MMM] — <angle>`
+7. Logs the picked article to the Sent Articles DB so tomorrow's run won't repeat it
+8. If everything in today's pull is a dupe, sends a "no fresh content today" email instead
 
----
+## Workflow design philosophy
+
+The system is split into three layers, each doing what it's good at:
+
+| Layer | Job | Tool |
+|---|---|---|
+| n8n + Gemini Flash (Pick) | Classify which article fits the content pillars | Cheap, fast, good at structured tasks |
+| n8n + Gemini Flash (Write) | Produce a structurally correct rough draft with the right ICP angle | Handles the boring frame |
+| Claude voice project | Apply full Voice DNA, scrub AI tics, final polish | Long-instruction-following, taste |
+
+The n8n output is a **research note, not a publish-ready post**. Treating it as a draft to forward leads to generic copy. Treating it as raw material for the voice project leads to sharp posts.
 
 ## Target audience
 
-Early-stage B2B SaaS founders and startup founders building one-person marketing functions with AI.
-
----
+LinkedIn audience is split between:
+1. Early-stage B2B SaaS founders
+2. Founders / marketers building one-person marketing functions with AI
 
 ## Content pillars
 
-- Building messaging and positioning that differentiates your brand
-- One-person marketing team with agentic AI
-- Cross-functional team alignment in marketing
-
----
+1. Messaging and positioning that differentiates B2B brands
+2. One-person marketing teams powered by agentic AI
+3. Cross-functional alignment (marketing × product × sales)
 
 ## Workflow architecture
 
 ```
-Schedule Trigger
-    → HTTP Request (Google News RSS)
-        → XML (parse to JSON)
-            → Limit
-                → OpenAI GPT-4o (filter 2 relevant articles → JSON array)
-                    → Notion (get persona: voice, audience, pillars, role)
-                        → Merge (append mode)
-                            → Code node (consolidate into 1 item)
-                                → OpenAI GPT-4o (write LinkedIn post)
-                                    → Gmail (send to inbox)
+Schedule Trigger (7 AM IST)
+    → Define RSS Feeds (5 sources)
+        → Split Into Feeds
+            → Fetch RSS (per feed)
+                → Parse XML
+                    → Split Into Articles
+                        → Normalise Articles (clean URL, title hash)
+                            → Collect All Articles
+                                → Dedupe Today's Pull
+                                    ├─→ Get Sent History (Notion, last 7 days)
+                                    └─→ Filter Out Already Sent
+                                        → Any Fresh Articles? (IF node)
+                                            ├─ NO → Send "No Content" Email
+                                            └─ YES → Get Persona (Notion)
+                                                → Pick Best Article (Gemini)
+                                                    → Parse Pick
+                                                        → Write Post (Gemini)
+                                                            → Parse Post (extract subject + body JSON)
+                                                                → Send Post Email (Gmail)
+                                                                    → Log to Sent Articles DB (Notion)
 ```
-
----
 
 ## Node breakdown
 
 | Node | Purpose |
 |---|---|
-| Schedule Trigger | Runs workflow on a set cadence |
-| HTTP Request | Fetches Google News RSS feed |
-| XML | Converts RSS XML to JSON |
-| Limit | Caps items to avoid token overload |
-| OpenAI #1 (Message a model) | Filters 2 most relevant articles, returns JSON array with title, summary, url |
-| Notion (Get many database pages) | Pulls persona config: system prompt, voice DNA, audience, content pillars, channel, role |
-| Merge | Appends Notion data and OpenAI output into one stream |
-| Code | Finds Notion item and article item, merges into single clean JSON object |
-| OpenAI #2 (Message a model1) | Writes LinkedIn post using persona config and filtered articles |
-| Gmail | Sends finished post to inbox |
+| Schedule Trigger | Fires daily at 7 AM |
+| Define RSS Feeds | Holds the list of 5 Google News URLs |
+| Split Into Feeds | One execution per feed |
+| Fetch RSS | HTTP GET on each feed URL |
+| Parse XML | RSS XML → JSON |
+| Split Into Articles | Each article becomes its own item |
+| Normalise Articles | Strips query params, lowercases URL, builds title-key hash |
+| Collect All Articles | Aggregates articles from all 5 feeds |
+| Dedupe Today's Pull | Removes duplicates across feeds (by URL + title hash) |
+| Get Sent History | Pulls past 7 days of sent posts from Notion |
+| Filter Out Already Sent | Removes candidates that match history |
+| Any Fresh Articles? | IF node — branches to write flow or "no content" email |
+| Get Persona | Pulls system_prompt, audience, pillars, voice rules from Notion |
+| Pick Best Article | Gemini picks one article, told to diversify from recent topics |
+| Parse Pick | Cleans Gemini JSON output, cross-references against fresh list |
+| Write Post | Gemini drafts the post + subject line as JSON |
+| Parse Post | Strips code fences, adds `LI Draft [DD MMM]` prefix to subject |
+| Send Post Email | Gmail delivery |
+| Send "No Content" Email | Failsafe when everything is a dupe |
+| Log to Sent Articles DB | Creates a row so tomorrow knows what's been sent |
 
----
+## RSS feeds
 
-## Notion database schema
+All scoped to the last 24 hours via the `when:1d` Google News parameter.
 
-The workflow reads from a Notion database with the following properties:
-
-| Field | Description |
+| Feed | Query |
 |---|---|
-| `property_name` | Author name (Kushal Bhosale) |
-| `property_role` | Professional role |
-| `property_audience` | Target audience definition |
-| `property_channel` | Publishing channel (LinkedIn) |
-| `property_content_pillars` | 3 content focus areas |
-| `property_system_prompt` | Full system prompt including voice sample |
-| `property_avoid` | Voice DNA: banned words, phrases, patterns |
-| `property_tone` | Tone descriptor |
-| `property_active` | Toggle to pause/resume workflow |
+| AI Marketing B2B | `AI marketing B2B startup` |
+| Solo Marketing Function | `"one person marketing" OR "solo marketer" OR "lean marketing team"` |
+| Marketing Automation Startups | `marketing automation early stage startup` |
+| B2B GTM Growth | `B2B GTM OR "go to market" startup growth` |
+| AI Tools for Marketers | `"AI tools" marketers OR "AI for marketing"` |
 
----
+Swap or add queries in the `Define RSS Feeds` node.
 
-## Voice DNA (summary)
+## Notion databases
 
-The output is governed by a detailed writing ruleset stored in Notion. Key rules:
+### Personas DB
 
-- Short paragraphs, 1-2 sentences default
-- No em dashes, no filler phrases, no hype language
-- Write in first person, direct address, active voice
-- Banned: "leverage," "scalable," "seamless," "game-changer" and ~60 other AI-fingerprint words
-- Banned structures: negative parallelisms ("It's not X, it's Y"), engagement bait, metronome rhythm
-- End posts with a sharp, specific question tied to the article's insight
+Stores the writing config. The workflow reads one row.
 
----
+| Property | Type | Purpose |
+|---|---|---|
+| name | Title | Persona name |
+| role | Text | Professional role |
+| audience | Text | Target audience |
+| channel | Select | LinkedIn / X / Instagram |
+| content_pillars | Text | 3 focus areas |
+| system_prompt | Text | Writing brief + sample voice |
+| avoid | Text | 10 hard rules (banned words, structures, phrases) |
+| tone | Select | Tone descriptor |
+| active | Checkbox | Pause/resume toggle |
 
-## RSS feed
+### Sent Articles DB
 
-```
-https://news.google.com/rss/search?q=AI+marketing+B2B+startup&hl=en-IN&gl=IN&ceid=IN:en
-```
+Tracks every article sent so dedup works across days.
 
-Swap keywords to shift content focus. Additional sources to add later: SaaStr, a16z, First Round Review.
+| Property | Type | Purpose |
+|---|---|---|
+| Title | Title | Article headline |
+| Clean URL | Text | Normalised URL (lowercased, no query params) |
+| Title Key | Text | Hash of article title for fuzzy matching |
+| URL | URL | Original article link |
+| Sent Date | Date | When the post was drafted |
 
----
+## Voice DNA approach
 
-## Key prompts
+The persona's `avoid` field contains 10 hard rules — short enough for Gemini Flash to follow. Full Voice DNA (4000+ words: banned vocabulary, structural rules, formatting, anti-overfitting guidance) lives in the Claude voice project, applied during final polish.
 
-**Article filter prompt (OpenAI #1)**
-```
-You are a content filter for a newsletter. From the articles below, pick the 2 most
-relevant for B2B startup founders and investors setting up one-person marketing
-functions using AI. Summarise each in 3 bullet points. Return ONLY a JSON array
-with keys: title, summary, url. No extra text, no markdown, no code blocks.
-```
+Hard rules enforced in n8n:
+- No em dashes
+- No "It's not X, it's Y" reframe constructions
+- ~20 banned AI words (delve, leverage, seamless, transformative, etc.)
+- No rule-of-three lists
+- No rhetorical questions ending with three adjectives
+- Contractions always
+- Short paragraphs (1-2 sentences default)
+- First person, direct address, active voice
 
-**Post writer prompt (OpenAI #2)**
-
-Dynamically assembled from Notion fields:
-- System prompt + voice DNA
-- Audience, content pillars, channel, role
-- Filtered articles from OpenAI #1
-- Instruction: 150-200 words, hook on first line, 2-4 lines of insight, sharp closing question, no CTA, no hashtags
-
----
+Trying to enforce the full Voice DNA inside Gemini Flash failed. Flash glazes over long instruction sets. The split between n8n (rough structure) and voice project (final voice) handles this properly.
 
 ## Sample output
 
-> Gushwork just raised $9 million to scale AI-driven marketing for lean B2B SaaS teams.
+**Email subject:** `LI Draft [17 May] — Full-stack marketers replacing specialists`
+
+**Email body (rough draft, pre-voice-project):**
+
+> A prominent CMO is using AI to replace specialised marketing roles with 'full-stack' professionals. For founders, this means building lean marketing operations from day one. A single marketing lead, amplified by AI, can now handle content, analysis, and campaign management — work that once required a full department.
 >
-> Founders often think marketing means hiring a big team or dropping cash on agencies. I've seen startups burn $5-10k a month on generic content that doesn't move the needle. The real win comes from 1 person who knows the product, paired with AI that handles distribution and routine work.
+> What specific AI tools are expanding your marketing capabilities?
+
+**After voice project polish (publish-ready):**
+
+> A CMO at a public company just replaced 4 specialist marketing roles with 2 generalists who use AI.
 >
-> This keeps marketing lean, close to the product, and focused on the positioning that actually sticks.
+> The economics are obvious. The pattern matters more. We're watching the marketing org compress, not because of AI hype, but because specialists optimise for craft and generalists optimise for outcomes. AI handles the craft.
 >
-> Does your marketing feel like it's guessing, or is it tied to what your customers actually say?
+> If you're a founder hiring your first marketer in 2026, the right profile isn't a content specialist or a paid specialist. It's someone who can read a P&L and run all of it with tools.
+>
+> Are you still hiring marketing like it's 2019?
 
----
+## What broke along the way
 
-## What broke along the way (and how it was fixed)
+**Same post every day** in the original workflow. Root cause: no deduplication. Google News RSS ranks the same articles consistently, so the LLM kept picking from the same pool. Fixed by adding a Sent Articles DB and filtering against the last 7 days.
 
-**Telegram bot not working**
-Switched to Gmail. Bot wasn't receiving messages due to a likely webhook conflict; `deleteWebhook` confirmed nothing was set. Pivoted to Gmail which worked immediately.
+**Notion DB not found** in the n8n dropdown. Root cause: Notion integration didn't have access to the new DB. Fixed by adding the n8n connection to the DB via `... → Connections → Add n8n`.
 
-**Gemini credits ran out**
-Switched to OpenAI GPT-4o-mini mid-build, then upgraded to GPT-4o for better instruction-following on complex voice rules.
+**`Get Sent History` running 15 times.** Default behaviour: n8n runs nodes once per upstream item. Fixed by toggling **Execute Once** in Settings.
 
-**RSS feed passing channel metadata instead of articles**
-Articles were nested at `rss.channel.item`. Fixed the expression to `item.json.rss.channel.item` to reach the actual article array.
+**Empty email body** despite clean JSON output. Root cause: `=` prefix mismatch on Gmail field expressions. n8n needs *either* the `=` prefix *or* expression mode toggled on, not both. Doubling it produces literal `=` in the output.
 
-**Notion node returning only id, name, url**
-Was using "Get Database" operation which returns metadata only. Switched to "Get Many Database Pages" which returns full properties.
+**Voice DNA being ignored by Gemini Flash.** Root cause: 4000-word ruleset is too long for Flash to follow. Fixed by splitting work: short ruleset in n8n + full Voice DNA in Claude voice project.
 
-**Merge node mixing items**
-n8n's expression editor evaluates against the current item, so cross-referencing items via `$input.item(0)` in the prompt field was unreliable. Fixed by adding a Code node that consolidates everything into 1 clean item before the final OpenAI node.
+**Gemini 2.5 Pro quota too tight on free tier.** Tried upgrading the Write node to Pro for better instruction-following. Hit daily token limits within a few runs. Reverted to Flash + accepted that the n8n output is a rough draft, not a final post.
 
-**Output violating Voice DNA rules**
-GPT-4o-mini couldn't follow the long ruleset reliably. Switched to GPT-4o and added a CRITICAL CHECK reminder inside the prompt. Output quality improved significantly.
+## Configuration
 
----
+To run this workflow you'll need:
+
+1. n8n instance (cloud or self-hosted)
+2. Google Gemini API credential (Flash tier is enough)
+3. Gmail OAuth2 credential
+4. Notion OAuth2 credential
+5. Personas DB and Sent Articles DB in Notion, with the n8n integration connected to both
+6. DB IDs filled into the Notion nodes after import
 
 ## To activate
 
-Toggle the workflow from **Inactive → Active** in the n8n canvas. It will run on the configured schedule automatically.
-
----
+Toggle the workflow from Inactive → Active. It will run daily at 7 AM IST.
 
 ## Planned improvements
 
-- Add multiple RSS sources (SaaStr, a16z, First Round Review, Reddit r/SaaS)
-- Use `property_active` field in Notion as a filter node to pause per-persona without touching the workflow
-- Add Slack delivery as an alternative to Gmail
-- Explore LinkedIn API or Zapier integration for direct publishing
+- Add a daily summary table to Notion: articles seen, articles sent, articles skipped (deduped)
+- Move the Gemini Write step to Claude via Anthropic API for better Voice DNA adherence in-flow
+- Add an LLM-judged quality score on each draft so the email subject signals "high signal" vs "low signal" drafts
+- Consider a manual "topic queue" Notion DB that overrides RSS on days when there's a specific narrative I want to ride
+- Explore direct LinkedIn publishing via API after a few weeks of validated draft quality
