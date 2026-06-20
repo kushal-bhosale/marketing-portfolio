@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+linkedin_cookies.json
+linkedin_bot.db
+*.db
+.env

@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LinkedIn Bot</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f3f2ef; color: #1a1a1a; }
+  header { background: #0a66c2; color: white; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #ff4d4d; flex-shrink: 0; }
+  .status-dot.green { background: #4CAF50; }
+  nav { background: white; border-bottom: 1px solid #e0e0e0; display: flex; gap: 0; }
+  nav button { padding: 14px 20px; border: none; background: none; cursor: pointer; font-size: 14px; color: #555; border-bottom: 3px solid transparent; transition: all .2s; }
+  nav button.active { color: #0a66c2; border-bottom-color: #0a66c2; font-weight: 600; }
+  nav button:hover { background: #f3f2ef; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+  .tab { display: none; } .tab.active { display: block; }
+  .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .card h2 { font-size: 16px; margin-bottom: 16px; color: #1a1a1a; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  label { display: block; font-size: 13px; color: #555; margin-bottom: 4px; font-weight: 500; }
+  input, select, textarea { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; outline: none; transition: border .2s; }
+  input:focus, select:focus, textarea:focus { border-color: #0a66c2; }
+  textarea { resize: vertical; min-height: 80px; }
+  .btn { padding: 9px 18px; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; font-weight: 500; transition: all .15s; }
+  .btn-primary { background: #0a66c2; color: white; }
+  .btn-primary:hover { background: #004182; }
+  .btn-secondary { background: white; color: #0a66c2; border: 1px solid #0a66c2; }
+  .btn-secondary:hover { background: #e8f0fe; }
+  .btn-danger { background: #dc2626; color: white; }
+  .btn-danger:hover { background: #b91c1c; }
+  .btn-sm { padding: 5px 12px; font-size: 13px; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .stats-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  .stat-box { background: white; border-radius: 8px; padding: 16px 20px; flex: 1; min-width: 110px; box-shadow: 0 1px 3px rgba(0,0,0,.1); text-align: center; }
+  .stat-box .num { font-size: 28px; font-weight: 700; color: #0a66c2; }
+  .stat-box .lbl { font-size: 12px; color: #777; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; padding: 10px 12px; background: #f8f8f8; border-bottom: 2px solid #e0e0e0; font-size: 12px; color: #555; text-transform: uppercase; letter-spacing: .5px; }
+  td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+  tr:hover td { background: #fafafa; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+  .badge-pending { background: #fef3c7; color: #92400e; }
+  .badge-queued { background: #dbeafe; color: #1e40af; }
+  .badge-requested { background: #ede9fe; color: #5b21b6; }
+  .badge-connected { background: #d1fae5; color: #065f46; }
+  .badge-messaged { background: #d1fae5; color: #065f46; }
+  .badge-ignored { background: #f3f4f6; color: #6b7280; }
+  .avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; background: #e0e0e0; }
+  .avatar-placeholder { width: 36px; height: 36px; border-radius: 50%; background: #0a66c2; color: white; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; flex-shrink: 0; }
+  .lead-name { font-weight: 500; color: #1a1a1a; }
+  .lead-sub { font-size: 12px; color: #777; margin-top: 2px; }
+  .actions-row { display: flex; gap: 8px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+  .toast { position: fixed; bottom: 24px; right: 24px; background: #1a1a1a; color: white; padding: 12px 20px; border-radius: 8px; font-size: 14px; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 1000; }
+  .toast.show { opacity: 1; }
+  .alert { padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; font-size: 14px; }
+  .alert-info { background: #dbeafe; color: #1e40af; }
+  .alert-warn { background: #fef3c7; color: #92400e; }
+  .log-item { padding: 8px 0; border-bottom: 1px solid #f0f0f0; display: flex; gap: 12px; font-size: 13px; }
+  .log-time { color: #999; white-space: nowrap; flex-shrink: 0; }
+  .log-action { color: #0a66c2; font-weight: 500; flex-shrink: 0; }
+  .checkbox-all { cursor: pointer; }
+  .select-bar { background: #0a66c2; color: white; padding: 10px 16px; border-radius: 6px; display: none; align-items: center; gap: 12px; margin-bottom: 12px; font-size: 14px; }
+  .select-bar.visible { display: flex; }
+  .filter-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 16px; }
+  .filter-row > div { flex: 1; min-width: 120px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="status-dot" id="authDot"></div>
+  <h1>LinkedIn Bot</h1>
+  <span id="authLabel" style="font-size:13px;opacity:.8;margin-left:4px">Checking auth...</span>
+  <div style="margin-left:auto;display:flex;gap:8px;">
+    <button class="btn btn-secondary btn-sm" style="color:white;border-color:rgba(255,255,255,.5)" onclick="openBrowser()">Open Browser</button>
+    <button class="btn btn-secondary btn-sm" style="color:white;border-color:rgba(255,255,255,.5)" onclick="saveCookies()">Save Session</button>
+  </div>
+</header>
+
+<nav>
+  <button class="active" onclick="showTab('search', this)">Search</button>
+  <button onclick="showTab('leads', this)">Leads</button>
+  <button onclick="showTab('connected', this)">Connected</button>
+  <button onclick="showTab('activity', this)">Activity</button>
+  <button onclick="showTab('settings', this)">Settings</button>
+</nav>
+
+<div class="container">
+
+<!-- SEARCH TAB -->
+<div id="tab-search" class="tab active">
+  <div class="stats-row" id="statsRow"></div>
+  <div class="card">
+    <h2>Find Leads</h2>
+    <div class="grid-3" style="margin-bottom:12px;">
+      <div><label>Keywords</label><input id="f-keywords" placeholder="e.g. growth marketing"></div>
+      <div><label>Job Title</label><input id="f-title" placeholder="e.g. Head of Sales"></div>
+      <div><label>Location</label><input id="f-location" placeholder="e.g. San Francisco"></div>
+    </div>
+    <div class="grid-2" style="margin-bottom:16px;">
+      <div>
+        <label>Network Distance</label>
+        <select id="f-network">
+          <option value="S">2nd Degree (recommended)</option>
+          <option value="F">1st Degree</option>
+          <option value="O">3rd+ Degree</option>
+          <option value="S,O">2nd + 3rd Degree</option>
+        </select>
+      </div>
+      <div><label>Max Results</label><input id="f-max" type="number" value="30" min="1" max="100"></div>
+    </div>
+    <button class="btn btn-primary" onclick="runSearch()" id="searchBtn">Search LinkedIn</button>
+  </div>
+
+  <div id="searchResults"></div>
+</div>
+
+<!-- LEADS TAB -->
+<div id="tab-leads" class="tab">
+  <div class="card">
+    <h2>Pending & Queued Leads</h2>
+    <div class="alert alert-info">Select leads below and click "Queue Selected" to schedule connection requests. Run the queue manually or it runs automatically every 30 min during business hours.</div>
+    <div class="select-bar" id="selectBar">
+      <span id="selectedCount">0 selected</span>
+      <button class="btn btn-sm" style="background:white;color:#0a66c2" onclick="queueSelected()">Queue Selected for Connection</button>
+      <button class="btn btn-sm" style="background:rgba(255,255,255,.2);color:white" onclick="clearSelection()">Clear</button>
+    </div>
+    <div id="leadsTable"></div>
+    <div class="actions-row">
+      <button class="btn btn-primary btn-sm" onclick="triggerConnections()">Run Connection Queue Now</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONNECTED TAB -->
+<div id="tab-connected" class="tab">
+  <div class="card">
+    <h2>Accepted Connections</h2>
+    <div class="alert alert-info">These people accepted your connection request. Follow-up messages are sent automatically, but you can also trigger a manual check.</div>
+    <div style="margin-bottom:16px;">
+      <button class="btn btn-primary btn-sm" onclick="triggerAcceptanceCheck()">Check for New Acceptances Now</button>
+    </div>
+    <div id="connectedTable"></div>
+  </div>
+</div>
+
+<!-- ACTIVITY TAB -->
+<div id="tab-activity" class="tab">
+  <div class="card">
+    <h2>Activity Log</h2>
+    <div id="activityLog"></div>
+  </div>
+</div>
+
+<!-- SETTINGS TAB -->
+<div id="tab-settings" class="tab">
+  <div class="card">
+    <h2>Rate Limits</h2>
+    <div class="grid-3" style="margin-bottom:16px;">
+      <div><label>Daily Connection Limit</label><input id="s-limit" type="number" min="1" max="20"></div>
+      <div><label>Min Delay (seconds)</label><input id="s-min" type="number" min="10"></div>
+      <div><label>Max Delay (seconds)</label><input id="s-max" type="number" min="30"></div>
+    </div>
+    <div class="grid-2" style="margin-bottom:16px;">
+      <div><label>Business Hours Start (24h)</label><input id="s-start" type="number" min="0" max="23"></div>
+      <div><label>Business Hours End (24h)</label><input id="s-end" type="number" min="0" max="23"></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Message Templates</h2>
+    <div style="margin-bottom:12px;">
+      <label>Connection Note (optional, max 300 chars) — use {name} for first name</label>
+      <textarea id="s-connmsg" maxlength="300" placeholder="Hi {name}, I came across your profile and would love to connect!"></textarea>
+    </div>
+    <div style="margin-bottom:16px;">
+      <label>Follow-up Message after Acceptance — use {name} for first name</label>
+      <textarea id="s-followup" placeholder="Hi {name}, thanks for connecting! I'd love to learn more about what you're working on."></textarea>
+    </div>
+    <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+  </div>
+</div>
+
+</div><!-- /container -->
+
+<div class="toast" id="toast"></div>
+
+<script>
+let selectedLeads = new Set();
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+
+function toast(msg, duration = 3000) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), duration);
+}
+
+async function api(path, method = 'GET', body = null) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function badge(status) {
+  return `<span class="badge badge-${status}">${status}</span>`;
+}
+
+function avatar(lead) {
+  if (lead.profile_image) return `<img class="avatar" src="${lead.profile_image}" onerror="this.style.display='none'">`;
+  const init = (lead.name || '?')[0].toUpperCase();
+  return `<div class="avatar-placeholder">${init}</div>`;
+}
+
+function showTab(name, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+  if (name === 'leads') loadLeads();
+  if (name === 'connected') loadConnected();
+  if (name === 'activity') loadActivity();
+  if (name === 'settings') loadSettings();
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+async function checkAuth() {
+  try {
+    const r = await api('/api/auth/check', 'POST');
+    const dot = document.getElementById('authDot');
+    const lbl = document.getElementById('authLabel');
+    dot.className = 'status-dot ' + (r.logged_in ? 'green' : '');
+    lbl.textContent = r.logged_in ? 'Logged in' : 'Not logged in';
+  } catch(e) {}
+}
+
+async function openBrowser() {
+  await api('/api/auth/open-browser', 'POST');
+  toast('Browser opened. Log in to LinkedIn, then click "Save Session".');
+}
+
+async function saveCookies() {
+  await api('/api/auth/save-cookies', 'POST');
+  toast('Session saved!');
+  checkAuth();
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+async function loadStats() {
+  const s = await api('/api/stats');
+  const labels = { pending:'Pending', queued:'Queued', requested:'Requested', connected:'Connected', messaged:'Messaged' };
+  const html = Object.entries(labels).map(([k, l]) =>
+    `<div class="stat-box"><div class="num">${s[k] || 0}</div><div class="lbl">${l}</div></div>`
+  ).join('');
+  document.getElementById('statsRow').innerHTML = html;
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+
+async function runSearch() {
+  const btn = document.getElementById('searchBtn');
+  btn.disabled = true; btn.textContent = 'Searching...';
+  const el = document.getElementById('searchResults');
+  el.innerHTML = '<div class="card" style="color:#777;text-align:center;padding:32px">Searching LinkedIn... this may take 30–60 seconds.</div>';
+
+  try {
+    const network = document.getElementById('f-network').value.split(',');
+    const r = await api('/api/search', 'POST', {
+      keywords: document.getElementById('f-keywords').value,
+      title: document.getElementById('f-title').value,
+      location: document.getElementById('f-location').value,
+      network,
+      max_results: parseInt(document.getElementById('f-max').value) || 30,
+    });
+
+    if (!r.leads.length) {
+      el.innerHTML = '<div class="card" style="color:#777;text-align:center;padding:32px">No results found. Try different filters.</div>';
+    } else {
+      el.innerHTML = renderLeadTable(r.leads, true);
+      toast(`Found ${r.count} leads — go to the Leads tab to select and queue them.`);
+      loadStats();
+      // Reload leads tab in background so it's ready
+      loadLeads();
+    }
+  } catch(e) {
+    el.innerHTML = `<div class="card" style="color:#dc2626;padding:16px">Error: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Search LinkedIn';
+  }
+}
+
+function renderLeadTable(leads, fromSearch = false) {
+  if (!leads.length) return '<p style="color:#777;padding:16px">No leads.</p>';
+  return `<div class="card" style="padding:0;overflow:hidden">
+    <table>
+      <thead><tr>
+        ${!fromSearch ? '<th><input type="checkbox" class="checkbox-all" onchange="toggleAll(this)"></th>' : ''}
+        <th>Person</th><th>Headline</th><th>Location</th><th>Status</th>
+      </tr></thead>
+      <tbody>
+        ${leads.map(l => `<tr>
+          ${!fromSearch ? `<td><input type="checkbox" class="lead-cb" value="${l.id}" onchange="updateSelection(this)"></td>` : ''}
+          <td>
+            <div style="display:flex;align-items:center;gap:10px">
+              ${avatar(l)}
+              <div>
+                <div class="lead-name"><a href="${l.linkedin_url}" target="_blank" style="color:inherit;text-decoration:none">${l.name}</a></div>
+                <div class="lead-sub">${l.company || ''}</div>
+              </div>
+            </div>
+          </td>
+          <td style="max-width:200px;"><span style="font-size:13px;color:#555">${l.headline || ''}</span></td>
+          <td style="font-size:13px;color:#777">${l.location || ''}</td>
+          <td>${badge(l.status || 'pending')}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+// ── Leads ─────────────────────────────────────────────────────────────────────
+
+async function loadLeads() {
+  const leads = await api('/api/leads?status=pending');
+  const queued = await api('/api/leads?status=queued');
+  const all = [...leads, ...queued];
+  if (!all.length) {
+    document.getElementById('leadsTable').innerHTML = '<p style="color:#777;padding:16px">No leads yet. Run a search first.</p>';
+    return;
+  }
+  document.getElementById('leadsTable').innerHTML = renderLeadTable(all, false);
+}
+
+function toggleAll(cb) {
+  document.querySelectorAll('.lead-cb').forEach(el => {
+    el.checked = cb.checked;
+    updateSelection(el);
+  });
+}
+
+function updateSelection(cb) {
+  const id = parseInt(cb.value);
+  if (cb.checked) selectedLeads.add(id);
+  else selectedLeads.delete(id);
+  const bar = document.getElementById('selectBar');
+  const cnt = document.getElementById('selectedCount');
+  cnt.textContent = `${selectedLeads.size} selected`;
+  bar.className = 'select-bar' + (selectedLeads.size ? ' visible' : '');
+}
+
+function clearSelection() {
+  selectedLeads.clear();
+  document.querySelectorAll('.lead-cb').forEach(el => el.checked = false);
+  document.querySelector('.checkbox-all') && (document.querySelector('.checkbox-all').checked = false);
+  updateSelection({ value: 0, checked: false });
+}
+
+async function queueSelected() {
+  if (!selectedLeads.size) return;
+  await api('/api/leads/queue', 'POST', { lead_ids: [...selectedLeads] });
+  toast(`${selectedLeads.size} leads queued for connection requests.`);
+  clearSelection();
+  loadLeads();
+  loadStats();
+}
+
+async function triggerConnections() {
+  await api('/api/run/connections', 'POST');
+  toast('Connection queue started. Check Activity log for progress.');
+}
+
+// ── Connected ─────────────────────────────────────────────────────────────────
+
+async function loadConnected() {
+  const leads = await api('/api/leads?status=connected');
+  const messaged = await api('/api/leads?status=messaged');
+  const all = [...leads, ...messaged];
+  document.getElementById('connectedTable').innerHTML = renderLeadTable(all);
+}
+
+async function triggerAcceptanceCheck() {
+  await api('/api/run/check-acceptances', 'POST');
+  toast('Checking for new connections... check Activity log shortly.');
+  setTimeout(loadConnected, 5000);
+}
+
+// ── Activity ──────────────────────────────────────────────────────────────────
+
+async function loadActivity() {
+  const logs = await api('/api/activity');
+  if (!logs.length) {
+    document.getElementById('activityLog').innerHTML = '<p style="color:#777;padding:8px">No activity yet.</p>';
+    return;
+  }
+  document.getElementById('activityLog').innerHTML = logs.map(l => `
+    <div class="log-item">
+      <span class="log-time">${new Date(l.created_at + 'Z').toLocaleString()}</span>
+      <span class="log-action">${l.action}</span>
+      <span>${l.detail}</span>
+    </div>
+  `).join('');
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+
+async function loadSettings() {
+  const s = await api('/api/settings');
+  document.getElementById('s-limit').value = s.daily_connection_limit || 15;
+  document.getElementById('s-min').value = s.min_delay_seconds || 30;
+  document.getElementById('s-max').value = s.max_delay_seconds || 90;
+  document.getElementById('s-start').value = s.business_hours_start || 9;
+  document.getElementById('s-end').value = s.business_hours_end || 18;
+  document.getElementById('s-connmsg').value = s.connection_message || '';
+  document.getElementById('s-followup').value = s.follow_up_message || '';
+}
+
+async function saveSettings() {
+  await api('/api/settings', 'POST', {
+    daily_connection_limit: parseInt(document.getElementById('s-limit').value),
+    min_delay_seconds: parseInt(document.getElementById('s-min').value),
+    max_delay_seconds: parseInt(document.getElementById('s-max').value),
+    business_hours_start: parseInt(document.getElementById('s-start').value),
+    business_hours_end: parseInt(document.getElementById('s-end').value),
+    connection_message: document.getElementById('s-connmsg').value,
+    follow_up_message: document.getElementById('s-followup').value,
+  });
+  toast('Settings saved!');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+checkAuth();
+loadStats();
+setInterval(checkAuth, 60000);
+setInterval(loadStats, 30000);
+</script>
+</body>
+</html>
