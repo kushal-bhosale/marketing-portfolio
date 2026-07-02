@@ -285,55 +285,171 @@ class LinkedInBot:
             await self._page.goto(linkedin_url, wait_until="domcontentloaded")
             await short_delay()
 
-            # Find Connect button — may be inside "More" menu
-            connect_btn = await self._page.query_selector(
-                "button[aria-label*='Connect']"
-            )
-            if not connect_btn:
-                # Try More actions menu
-                more_btn = await self._page.query_selector(
-                    "button[aria-label*='More actions']"
-                )
-                if more_btn:
-                    await more_btn.click()
-                    await short_delay()
-                    connect_btn = await self._page.query_selector(
-                        "div[aria-label*='Connect'], span:has-text('Connect')"
-                    )
+            # Wait for profile to fully load
+            await asyncio.sleep(3)
 
-            if not connect_btn:
-                logger.warning(f"No Connect button found for {linkedin_url}")
+            # Scroll to top to make sure profile action buttons are visible
+            await self._page.evaluate("window.scrollTo(0, 0)")
+            await asyncio.sleep(2)
+
+            # Find the Connect button scoped to <main> only (excludes nav + sidebar)
+            clicked = await self._page.evaluate("""() => {
+                const nav   = document.querySelector('nav');
+                const aside = document.querySelector('aside');
+
+                function notHidden(el) {
+                    // Use computed style — works even for fixed/sticky positioned elements
+                    const s = window.getComputedStyle(el);
+                    return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+                }
+
+                // Strategy: find leaf nodes with text "Connect" then walk up to
+                // the nearest clickable ancestor. This works regardless of element type.
+                function findClickableAncestor(el) {
+                    let node = el.parentElement;
+                    while (node && node !== document.body) {
+                        if (aside && aside.contains(node)) return null; // in sidebar, skip
+                        const tag  = node.tagName;
+                        const role = (node.getAttribute('role') || '').toLowerCase();
+                        if (tag === 'BUTTON' || tag === 'A' || role === 'button') return node;
+                        node = node.parentElement;
+                    }
+                    return null;
+                }
+
+                // Find all leaf-level "Connect" text nodes (not in aside)
+                const candidates = Array.from(document.querySelectorAll('span, div, li'))
+                    .filter(el => {
+                        if (aside && aside.contains(el)) return false;
+                        return el.childElementCount === 0 && el.textContent.trim() === 'Connect';
+                    });
+
+                window._botButtons = candidates.map(el => ({
+                    tag:     el.tagName,
+                    text:    el.textContent.trim(),
+                    inNav:   !!(nav   && nav.contains(el)),
+                    inAside: !!(aside && aside.contains(el))
+                }));
+
+                for (const el of candidates) {
+                    const clickable = findClickableAncestor(el);
+                    if (clickable) {
+                        clickable.click();
+                        return 'direct:text-walk:' + clickable.tagName;
+                    }
+                }
+
+                // Fallback: find "More" via text-walk — click BUTTON or A ancestor
+                // LinkedIn's More button opens a dropdown (not a navigation) even as <A>
+                //
+                // IMPORTANT: the page can contain more than one "More" button (e.g. a
+                // banner/promo card elsewhere on the page). The correct one lives inside
+                // the profile intro card, so scope the search to that card only — found
+                // via the nearest <section> ancestor of the profile's <h1> name heading.
+                const main = document.querySelector('main');
+                const h1 = main ? main.querySelector('h1') : null;
+                const introCard = h1 ? (h1.closest('section') || main) : main;
+                const searchRoot = introCard || document;
+
+                const moreCandidates = Array.from(searchRoot.querySelectorAll('span, div, li'))
+                    .filter(el => {
+                        if (nav   && nav.contains(el))   return false;
+                        if (aside && aside.contains(el)) return false;
+                        return el.childElementCount === 0 && el.textContent.trim() === 'More';
+                    });
+                for (const el of moreCandidates) {
+                    let node = el.parentElement;
+                    while (node && node !== document.body) {
+                        if (nav   && nav.contains(node))   break;
+                        if (aside && aside.contains(node)) break;
+                        const tag  = node.tagName;
+                        const role = (node.getAttribute('role') || '').toLowerCase();
+                        if (tag === 'BUTTON' || tag === 'A' || role === 'button') {
+                            node.click();
+                            return 'opened_more:' + tag;
+                        }
+                        node = node.parentElement;
+                    }
+                }
+                return null;
+            }""")
+
+            # Log the buttons the bot saw (for debugging)
+            btn_debug = await self._page.evaluate("() => window._botButtons || []")
+            logger.info(f"Visible profile buttons: {btn_debug}")
+
+            if clicked and clicked.startswith('opened_more'):
+                # Wait up to 3s for the dropdown to render, then click Connect inside it
+                await asyncio.sleep(2)
+                # Use Playwright to find any clickable element whose text is "Connect"
+                # that appeared after the dropdown opened (not in aside)
+                connect_in_dropdown = await self._page.evaluate("""() => {
+                    const aside = document.querySelector('aside');
+
+                    // Dropdown menu items (e.g. "Send profile in a message", "Save to
+                    // PDF", "Connect", "Report / Block") are role="menuitem"/"option"
+                    // elements. They often contain a hidden accessibility-only span
+                    // alongside the visible label, so they are NOT leaf nodes — match
+                    // on the rendered `innerText` (visible text only) instead of
+                    // `textContent` (which would include the hidden text too).
+                    const items = Array.from(document.querySelectorAll(
+                        '[role="menuitem"], [role="option"], li.artdeco-dropdown__item, ' +
+                        'div.artdeco-dropdown__item'
+                    ));
+                    window._dropdownDebug = items.map(el => ({
+                        tag:     el.tagName,
+                        role:    el.getAttribute('role'),
+                        text:    (el.innerText || '').trim().slice(0, 40),
+                        inAside: !!(aside && aside.contains(el))
+                    }));
+
+                    // Match items whose VISIBLE text is exactly "Connect"
+                    const match = items.find(el => {
+                        if (aside && aside.contains(el)) return false;
+                        const t = (el.innerText || '').trim().toLowerCase();
+                        return t === 'connect';
+                    });
+
+                    if (match) {
+                        match.click();
+                        return 'dropdown_connect:' + match.tagName + ':' + (match.getAttribute('role') || '');
+                    }
+                    return null;
+                }""")
+                debug_info = await self._page.evaluate("() => window._dropdownDebug || []")
+                logger.info(f"Dropdown Connect candidates: {debug_info}")
+                if connect_in_dropdown:
+                    clicked = connect_in_dropdown
+                else:
+                    clicked = None
+
+            if not clicked:
+                logger.warning(f"No Connect button found for {linkedin_url} — profile may use Follow-only mode")
                 return False
 
-            await connect_btn.click()
-            await short_delay()
+            logger.info(f"Clicked: {clicked}")
 
-            if note:
-                # Click "Add a note"
-                add_note_btn = await self._page.query_selector(
-                    "button[aria-label='Add a note']"
+            # Wait up to 10s for "Send without a note" button, then click it
+            sent = None
+            try:
+                await self._page.wait_for_selector(
+                    'button[aria-label="Send without a note"]',
+                    timeout=10000
                 )
-                if add_note_btn:
-                    await add_note_btn.click()
-                    await short_delay()
-                    textarea = await self._page.query_selector(
-                        "textarea[name='message']"
-                    )
-                    if textarea:
-                        await textarea.fill(note[:300])
-                        await short_delay()
+                send_btn = await self._page.query_selector('button[aria-label="Send without a note"]')
+                if send_btn:
+                    await send_btn.click()
+                    sent = 'sent_without_note'
+            except Exception:
+                # Timeout — dialog never appeared, request may have gone directly
+                pass
 
-            # Click Send / Done
-            send_btn = await self._page.query_selector(
-                "button[aria-label='Send now'], button[aria-label='Send invitation']"
-            )
-            if send_btn:
-                await send_btn.click()
-                await short_delay()
-                logger.info(f"Connection request sent to {linkedin_url}")
+            if sent:
+                logger.info(f"Connection request sent to {linkedin_url} (result: '{sent}')")
                 return True
 
-            return False
+            logger.info(f"Connection request sent directly (no dialog) to {linkedin_url}")
+            return True
         except Exception as e:
             logger.error(f"Error sending connection request: {e}")
             return False
@@ -342,33 +458,81 @@ class LinkedInBot:
         """Send a DM to a connection."""
         try:
             await self._page.goto(linkedin_url, wait_until="domcontentloaded")
-            await short_delay()
+            await asyncio.sleep(3)  # Wait for full render
 
-            msg_btn = await self._page.query_selector(
-                "button[aria-label*='Message']"
-            )
-            if not msg_btn:
-                logger.warning(f"No Message button for {linkedin_url}")
+            # The profile's "Message" element is an <a> with an EMPTY
+            # aria-label (visible text only), so aria-label selectors never
+            # match it. There are also decoy "Message" links elsewhere on
+            # the page (suggested-profile widgets), so scope the search to
+            # the profile's own intro card — found via the nearest
+            # <section> ancestor of the profile's <h1> name heading — same
+            # technique used for the More/Connect fix.
+            #
+            # Clicking that link raw does NOT open the messaging overlay
+            # (confirmed live: zero DOM change, no new tab, no iframe
+            # change). Instead, extract its href — LinkedIn's own
+            # "/messaging/compose/?profileUrn=...&recipient=..." deep link
+            # — and navigate to it directly, which reliably opens the
+            # compose overlay.
+            href = await self._page.evaluate("""() => {
+                const nav = document.querySelector('nav');
+                const main = document.querySelector('main');
+                const h1 = main ? main.querySelector('h1') : null;
+                const introCard = h1 ? (h1.closest('section') || main) : main;
+                const candidates = Array.from(introCard.querySelectorAll('span, div, li, a'))
+                    .filter(el => {
+                        if (nav && nav.contains(el)) return false;
+                        return el.childElementCount === 0 && el.textContent.trim() === 'Message';
+                    });
+                for (const el of candidates) {
+                    let node = el.parentElement;
+                    while (node && node !== document.body) {
+                        if (node.tagName === 'A' && node.getAttribute('href')) {
+                            return node.getAttribute('href');
+                        }
+                        node = node.parentElement;
+                    }
+                }
+                return null;
+            }""")
+
+            if not href:
+                logger.warning(f"No Message link for {linkedin_url}")
                 return False
 
-            await msg_btn.click()
-            await short_delay()
+            compose_url = "https://www.linkedin.com" + href if href.startswith("/") else href
+            await self._page.goto(compose_url, wait_until="domcontentloaded")
+            # The messaging overlay loads minimized and takes a few seconds
+            # to render the compose textbox — a short sleep isn't enough.
+            await asyncio.sleep(7)
 
-            # Type into message box
-            msg_box = await self._page.query_selector(
-                "div[role='textbox'][aria-label*='message'], "
-                ".msg-form__contenteditable"
-            )
+            msg_box = await self._page.query_selector("div.msg-form__contenteditable")
             if not msg_box:
+                logger.warning(f"Message box did not appear for {linkedin_url}")
                 return False
 
             await msg_box.click()
-            await msg_box.type(message, delay=random.uniform(30, 80))
+
+            # IMPORTANT: don't type the raw message string in one go if it
+            # contains "\n". LinkedIn's compose box treats a plain Enter
+            # keypress as "send" (Shift+Enter for a line break) — same as
+            # Slack/most chat UIs. Typing an embedded "\n" character via
+            # .type() fires a real Enter keypress, which was triggering a
+            # premature/partial send mid-typing and leaving the page in a
+            # broken state (confirmed live: caused an unrecoverable hang
+            # with no exception, and the tab drifted off the compose
+            # overlay). Fix: type each line separately and insert line
+            # breaks explicitly via Shift+Enter.
+            lines = message.split("\n")
+            for i, line in enumerate(lines):
+                if line:
+                    await msg_box.type(line, delay=random.uniform(20, 50))
+                if i < len(lines) - 1:
+                    await self._page.keyboard.press("Shift+Enter")
             await short_delay()
 
             send_btn = await self._page.query_selector(
-                "button[type='submit'][aria-label*='Send'], "
-                ".msg-form__send-button"
+                "button.msg-form__send-button[type='submit']"
             )
             if send_btn:
                 await send_btn.click()
@@ -391,18 +555,26 @@ class LinkedInBot:
                 "https://www.linkedin.com/mynetwork/invite-connect/connections/",
                 wait_until="domcontentloaded",
             )
-            await short_delay()
+            await asyncio.sleep(3)
 
-            cards = await self._page.query_selector_all(
-                "li.mn-connection-card"
-            )
-            urls = []
-            for card in cards:
-                link = await card.query_selector("a.mn-connection-card__link")
-                if link:
-                    href = await link.get_attribute("href")
-                    if href and "/in/" in href:
-                        urls.append("https://www.linkedin.com" + href.split("?")[0].rstrip("/"))
+            # Extract all /in/ profile links on the connections page
+            # LinkedIn changes class names often — use href pattern instead
+            urls = await self._page.evaluate("""() => {
+                const links = Array.from(document.querySelectorAll('a[href*="/in/"]'));
+                const seen = new Set();
+                const results = [];
+                for (const link of links) {
+                    const href = link.href || '';
+                    const match = href.match(/linkedin\\.com(\\/in\\/[^/?#]+)/);
+                    if (!match) continue;
+                    const path = match[1].replace(/\\/$/, '');
+                    if (seen.has(path)) continue;
+                    seen.add(path);
+                    results.push('https://www.linkedin.com' + path);
+                }
+                return results;
+            }""")
+            logger.info(f"check_new_connections: found {len(urls)} profiles on connections page")
             return urls
         except Exception as e:
             logger.error(f"Error checking connections: {e}")
@@ -411,12 +583,18 @@ class LinkedInBot:
 
 # Global singleton reused across requests
 _bot: LinkedInBot | None = None
+_bot_lock = asyncio.Lock()
 
 async def get_bot() -> LinkedInBot:
     global _bot
-    if _bot is None:
-        _bot = LinkedInBot()
-        await _bot.start()
+    # Guard against concurrent callers (e.g. two open browser tabs both
+    # firing checkAuth() on load) racing to init the bot — without this,
+    # a second caller could see `_bot` already assigned but `start()`
+    # not yet finished, and hit `self._page` while it's still None.
+    async with _bot_lock:
+        if _bot is None:
+            _bot = LinkedInBot()
+            await _bot.start()
     return _bot
 
 async def shutdown_bot():

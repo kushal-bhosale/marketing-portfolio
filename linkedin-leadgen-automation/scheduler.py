@@ -47,49 +47,63 @@ async def run_connection_queue():
     from linkedin import get_bot
     import random
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
 
-        if not await is_business_hours(db):
-            logger.info("Outside business hours, skipping connection queue.")
-            return
+            if not await is_business_hours(db):
+                logger.info("Outside business hours, skipping connection queue.")
+                return
 
-        limit = int(await get_setting(db, "daily_connection_limit", "15"))
-        sent_today = await connections_sent_today(db)
-        remaining = limit - sent_today
+            limit = int(await get_setting(db, "daily_connection_limit", "15"))
+            sent_today = await connections_sent_today(db)
+            remaining = limit - sent_today
+            logger.info(f"Connection queue: {sent_today} sent today, {remaining} remaining, limit={limit}")
 
-        if remaining <= 0:
-            logger.info(f"Daily limit of {limit} reached.")
-            return
+            if remaining <= 0:
+                logger.info(f"Daily limit of {limit} reached.")
+                return
 
-        min_delay = float(await get_setting(db, "min_delay_seconds", "30"))
-        max_delay = float(await get_setting(db, "max_delay_seconds", "90"))
-        note = await get_setting(db, "connection_message", "")
+            min_delay = float(await get_setting(db, "min_delay_seconds", "30"))
+            max_delay = float(await get_setting(db, "max_delay_seconds", "90"))
+            note = await get_setting(db, "connection_message", "")
 
-        # Get pending leads queued for connection
-        async with db.execute(
-            "SELECT * FROM leads WHERE status='queued' LIMIT ?", (remaining,)
-        ) as cur:
-            leads = await cur.fetchall()
+            # Get pending leads queued for connection
+            async with db.execute(
+                "SELECT * FROM leads WHERE status='queued' LIMIT ?", (remaining,)
+            ) as cur:
+                leads = await cur.fetchall()
 
-        bot = await get_bot()
+            logger.info(f"Found {len(leads)} queued leads to process")
+            if not leads:
+                logger.info("No queued leads found. Select leads in the Leads tab and click 'Queue Selected'.")
+                return
 
-        for lead in leads:
-            personalized_note = note.replace("{name}", lead["name"].split()[0]) if note else ""
-            success = await bot.send_connection_request(lead["linkedin_url"], personalized_note)
-            if success:
-                await db.execute(
-                    "UPDATE leads SET status='requested', connection_requested_at=datetime('now') WHERE id=?",
-                    (lead["id"],),
-                )
-                await log_activity(db, "connection_request", f"Sent to {lead['name']} ({lead['linkedin_url']})")
-            else:
-                await log_activity(db, "connection_failed", f"Failed for {lead['name']}")
-            await db.commit()
+            bot = await get_bot()
 
-            delay = random.uniform(min_delay, max_delay)
-            logger.info(f"Waiting {delay:.0f}s before next action...")
-            await asyncio.sleep(delay)
+            for lead in leads:
+                personalized_note = note.replace("{name}", lead["name"].split()[0]) if note else ""
+                success = await bot.send_connection_request(lead["linkedin_url"], personalized_note)
+                if success:
+                    await db.execute(
+                        "UPDATE leads SET status='requested', connection_requested_at=datetime('now') WHERE id=?",
+                        (lead["id"],),
+                    )
+                    await log_activity(db, "connection_request", f"Sent to {lead['name']} ({lead['linkedin_url']})")
+                else:
+                    # Mark as ignored if Connect button not found (profile may have it hidden)
+                    await db.execute(
+                        "UPDATE leads SET status='ignored' WHERE id=?", (lead["id"],)
+                    )
+                    await log_activity(db, "connection_skipped", f"No Connect button for {lead['name']} — skipped")
+                await db.commit()
+
+                delay = random.uniform(min_delay, max_delay)
+                logger.info(f"Waiting {delay:.0f}s before next action...")
+                await asyncio.sleep(delay)
+
+    except Exception as e:
+        logger.error(f"Connection queue error: {e}", exc_info=True)
 
 
 async def run_acceptance_check():
@@ -110,7 +124,7 @@ async def run_acceptance_check():
         connected_urls = await bot.check_new_connections()
 
         for url in connected_urls:
-            # Check if this is a lead we requested
+            # Check if this is a lead we requested (not yet marked connected)
             async with db.execute(
                 "SELECT * FROM leads WHERE linkedin_url=? AND status='requested'", (url,)
             ) as cur:
@@ -125,22 +139,28 @@ async def run_acceptance_check():
                 await log_activity(db, "connected", f"{lead['name']} accepted connection")
                 await db.commit()
 
-                # Send follow-up message
-                first_name = lead["name"].split()[0]
-                message = follow_up_template.replace("{name}", first_name)
+        # Now send follow-up to ALL connected leads not yet messaged (catches retries too)
+        async with db.execute(
+            "SELECT * FROM leads WHERE status='connected'"
+        ) as cur:
+            connected_leads = await cur.fetchall()
 
-                delay = random.uniform(min_delay, max_delay)
-                await asyncio.sleep(delay)
+        for lead in connected_leads:
+            first_name = lead["name"].split()[0]
+            message = follow_up_template.replace("{name}", first_name)
 
-                sent = await bot.send_message(url, message)
-                if sent:
-                    await db.execute(
-                        "UPDATE leads SET status='messaged', message_sent_at=datetime('now') WHERE id=?",
-                        (lead["id"],),
-                    )
-                    await db.execute(
-                        "INSERT INTO messages(lead_id, body) VALUES (?,?)",
-                        (lead["id"], message),
-                    )
-                    await log_activity(db, "message_sent", f"Sent follow-up to {lead['name']}")
-                    await db.commit()
+            delay = random.uniform(min_delay, max_delay)
+            await asyncio.sleep(delay)
+
+            sent = await bot.send_message(lead["linkedin_url"], message)
+            if sent:
+                await db.execute(
+                    "UPDATE leads SET status='messaged', message_sent_at=datetime('now') WHERE id=?",
+                    (lead["id"],),
+                )
+                await db.execute(
+                    "INSERT INTO messages(lead_id, body) VALUES (?,?)",
+                    (lead["id"], message),
+                )
+                await log_activity(db, "message_sent", f"Sent follow-up to {lead['name']}")
+                await db.commit()

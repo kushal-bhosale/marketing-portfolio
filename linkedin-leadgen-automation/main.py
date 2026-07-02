@@ -80,6 +80,22 @@ async def debug_page():
     return {"current_url": current_url, "link_count": len(hrefs), "links": hrefs[:20]}
 
 
+@app.get("/api/debug/buttons")
+async def debug_buttons():
+    """Dump all buttons on the current Chromium page."""
+    bot = await get_bot()
+    buttons = await bot._page.evaluate("""() => {
+        const btns = document.querySelectorAll('button, div[role="button"], a[role="button"]');
+        return Array.from(btns).map(b => ({
+            tag: b.tagName,
+            label: b.getAttribute('aria-label') || '',
+            text: b.innerText.trim().slice(0, 60),
+            visible: b.offsetParent !== null
+        })).filter(b => b.label || b.text);
+    }""")
+    return {"url": bot._page.url, "buttons": buttons}
+
+
 @app.get("/api/debug/extract")
 async def debug_extract():
     """Run extraction on whatever page Chromium is currently on."""
@@ -169,6 +185,17 @@ async def queue_leads(action: LeadAction):
             )
         await db.commit()
     return {"queued": len(action.lead_ids)}
+
+
+@app.post("/api/leads/reset")
+async def reset_leads():
+    """Reset all ignored/failed leads back to pending for re-testing."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE leads SET status='pending' WHERE status IN ('ignored', 'queued', 'requested')"
+        )
+        await db.commit()
+    return {"reset": True}
 
 
 @app.delete("/api/leads/{lead_id}")
