@@ -83,8 +83,28 @@ async def run_connection_queue():
 
             for lead in leads:
                 personalized_note = note.replace("{name}", lead["name"].split()[0]) if note else ""
-                success = await bot.send_connection_request(lead["linkedin_url"], personalized_note)
-                if success:
+                result = await bot.send_connection_request(lead["linkedin_url"], personalized_note)
+                if result == "already_pending":
+                    # Profile shows "Pending" — a request was already sent
+                    # earlier (by us or manually), just reconcile the DB
+                    # instead of logging it as a skip.
+                    await db.execute(
+                        "UPDATE leads SET status='requested', connection_requested_at=COALESCE(connection_requested_at, datetime('now')) WHERE id=?",
+                        (lead["id"],),
+                    )
+                    await log_activity(db, "connection_already_pending", f"{lead['name']} already has a pending request — marked requested")
+                elif result == "blocked_by_dialog":
+                    # LinkedIn showed an invitation dialog that never actually
+                    # completed the send (most commonly: "enter their email to
+                    # verify you know this member"). We deliberately don't try
+                    # to work around this — it's an anti-abuse checkpoint, not
+                    # a UI quirk — so just mark it skipped instead of falsely
+                    # recording a successful request.
+                    await db.execute(
+                        "UPDATE leads SET status='ignored' WHERE id=?", (lead["id"],)
+                    )
+                    await log_activity(db, "connection_blocked", f"{lead['name']} — LinkedIn required extra verification (e.g. email) to connect, skipped")
+                elif result:
                     await db.execute(
                         "UPDATE leads SET status='requested', connection_requested_at=datetime('now') WHERE id=?",
                         (lead["id"],),

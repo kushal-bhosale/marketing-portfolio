@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS leads (
     company TEXT,
     location TEXT,
     profile_image TEXT,
+    email TEXT,
+    source TEXT DEFAULT 'search',  -- search, apollo
     status TEXT DEFAULT 'pending',  -- pending, requested, connected, messaged, ignored
     connection_requested_at TEXT,
     connected_at TEXT,
@@ -49,6 +51,16 @@ async def init_db():
             s = stmt.strip()
             if s:
                 await db.execute(s)
+
+        # Migrate existing DBs created before the email/source columns existed.
+        # SQLite has no "ADD COLUMN IF NOT EXISTS", so check pragma first.
+        async with db.execute("PRAGMA table_info(leads)") as cur:
+            existing_cols = {row[1] async for row in cur}
+        if "email" not in existing_cols:
+            await db.execute("ALTER TABLE leads ADD COLUMN email TEXT")
+        if "source" not in existing_cols:
+            await db.execute("ALTER TABLE leads ADD COLUMN source TEXT DEFAULT 'search'")
+
         # Default settings
         defaults = {
             "daily_connection_limit": "15",

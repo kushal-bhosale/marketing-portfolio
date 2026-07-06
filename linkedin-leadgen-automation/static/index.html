@@ -34,6 +34,12 @@
   .btn-danger:hover { background: #b91c1c; }
   .btn-sm { padding: 5px 12px; font-size: 13px; }
   .btn:disabled { opacity: .5; cursor: not-allowed; }
+  /* Header buttons (Open Browser / Save Session) sit on the blue header bar,
+     so they need light/transparent styling instead of .btn-secondary's
+     white background — otherwise white text on white background is
+     invisible. */
+  .btn-header { background: rgba(255,255,255,.15); color: white; border: 1px solid rgba(255,255,255,.5); }
+  .btn-header:hover { background: rgba(255,255,255,.3); }
   .stats-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
   .stat-box { background: white; border-radius: 8px; padding: 16px 20px; flex: 1; min-width: 110px; box-shadow: 0 1px 3px rgba(0,0,0,.1); text-align: center; }
   .stat-box .num { font-size: 28px; font-weight: 700; color: #0a66c2; }
@@ -76,8 +82,8 @@
   <h1>LinkedIn Bot</h1>
   <span id="authLabel" style="font-size:13px;opacity:.8;margin-left:4px">Checking auth...</span>
   <div style="margin-left:auto;display:flex;gap:8px;">
-    <button class="btn btn-secondary btn-sm" style="color:white;border-color:rgba(255,255,255,.5)" onclick="openBrowser()">Open Browser</button>
-    <button class="btn btn-secondary btn-sm" style="color:white;border-color:rgba(255,255,255,.5)" onclick="saveCookies()">Save Session</button>
+    <button class="btn btn-header btn-sm" onclick="openBrowser()">Open Browser</button>
+    <button class="btn btn-header btn-sm" onclick="saveCookies()">Save Session</button>
   </div>
 </header>
 
@@ -114,6 +120,18 @@
       <div><label>Max Results</label><input id="f-max" type="number" value="30" min="1" max="100"></div>
     </div>
     <button class="btn btn-primary" onclick="runSearch()" id="searchBtn">Search LinkedIn</button>
+  </div>
+
+  <div class="card">
+    <h2>Import from Apollo</h2>
+    <p style="color:#777;font-size:13px;margin-bottom:12px">
+      Upload a CSV export (Apollo or similar) with a LinkedIn URL column to add those contacts as leads here, same as a search would. Rows with no LinkedIn URL are skipped. If a contact is already a lead, only their email gets filled in — status/history is left alone.
+    </p>
+    <div style="display:flex;gap:10px;align-items:center;">
+      <input type="file" id="apolloFile" accept=".csv">
+      <button class="btn btn-primary" onclick="uploadApolloCsv()" id="apolloUploadBtn">Upload CSV</button>
+    </div>
+    <div id="apolloUploadResult" style="margin-top:12px"></div>
   </div>
 
   <div id="searchResults"></div>
@@ -297,13 +315,48 @@ async function runSearch() {
   }
 }
 
+async function uploadApolloCsv() {
+  const input = document.getElementById('apolloFile');
+  const resultEl = document.getElementById('apolloUploadResult');
+  if (!input.files.length) {
+    resultEl.innerHTML = '<div class="alert alert-info">Choose a CSV file first.</div>';
+    return;
+  }
+  const btn = document.getElementById('apolloUploadBtn');
+  btn.disabled = true; btn.textContent = 'Uploading...';
+  resultEl.innerHTML = '';
+
+  try {
+    const formData = new FormData();
+    formData.append('file', input.files[0]);
+    const res = await fetch('/api/leads/upload', { method: 'POST', body: formData });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    const r = await res.json();
+    const parts = [`Imported <b>${r.imported}</b> new lead(s).`];
+    if (r.updated_email) parts.push(`Filled in email for <b>${r.updated_email}</b> existing lead(s).`);
+    if (r.skipped_duplicate) parts.push(`Skipped <b>${r.skipped_duplicate}</b> already-known contact(s).`);
+    if (r.skipped_no_linkedin_url) parts.push(`Skipped <b>${r.skipped_no_linkedin_url}</b> row(s) with no LinkedIn URL.`);
+    resultEl.innerHTML = `<div class="alert alert-info">${parts.join(' ')}</div>`;
+    input.value = '';
+    loadStats();
+    loadLeads();
+  } catch (e) {
+    resultEl.innerHTML = `<div class="card" style="color:#dc2626;padding:12px">Error: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Upload CSV';
+  }
+}
+
 function renderLeadTable(leads, fromSearch = false) {
   if (!leads.length) return '<p style="color:#777;padding:16px">No leads.</p>';
   return `<div class="card" style="padding:0;overflow:hidden">
     <table>
       <thead><tr>
         ${!fromSearch ? '<th><input type="checkbox" class="checkbox-all" onchange="toggleAll(this)"></th>' : ''}
-        <th>Person</th><th>Headline</th><th>Location</th><th>Status</th>
+        <th>Person</th><th>Headline</th><th>Location</th><th>Email</th><th>Status</th>
       </tr></thead>
       <tbody>
         ${leads.map(l => `<tr>
@@ -313,12 +366,13 @@ function renderLeadTable(leads, fromSearch = false) {
               ${avatar(l)}
               <div>
                 <div class="lead-name"><a href="${l.linkedin_url}" target="_blank" style="color:inherit;text-decoration:none">${l.name}</a></div>
-                <div class="lead-sub">${l.company || ''}</div>
+                <div class="lead-sub">${l.company || ''}${l.source === 'apollo' ? ' · Apollo' : ''}</div>
               </div>
             </div>
           </td>
           <td style="max-width:200px;"><span style="font-size:13px;color:#555">${l.headline || ''}</span></td>
           <td style="font-size:13px;color:#777">${l.location || ''}</td>
+          <td style="font-size:13px;color:#777">${l.email || ''}</td>
           <td>${badge(l.status || 'pending')}</td>
         </tr>`).join('')}
       </tbody>

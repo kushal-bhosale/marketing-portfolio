@@ -2,9 +2,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+import csv
+import io
 import json
+import re
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import aiosqlite
@@ -63,6 +66,39 @@ class SettingsUpdate(BaseModel):
     follow_up_message: str = ""
 
 
+# ── Apollo CSV import helpers ────────────────────────────────────────────────
+# Apollo's export column names have shifted across versions ("Person Linkedin
+# Url" vs "LinkedIn Url", etc.), so match on a normalized (lowercased,
+# punctuation/space-stripped) header against a list of known aliases rather
+# than requiring an exact column name.
+
+_APOLLO_ALIASES = {
+    "linkedin_url": ["personlinkedinurl", "linkedinurl", "linkedin", "personlinkedin", "liurl", "profileurl"],
+    "first_name": ["firstname"],
+    "last_name": ["lastname"],
+    "full_name": ["name", "fullname", "personname"],
+    "email": ["email", "emailaddress", "workemail"],
+    "title": ["title", "jobtitle", "headline", "persontitle"],
+    "company": ["company", "companyname", "organization", "organizationname", "account", "accountname"],
+    "city": ["city", "personcity"],
+    "state": ["state", "personstate"],
+    "country": ["country", "personcountry"],
+    "location": ["location"],
+}
+
+
+def _normalize_header(h: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (h or "").lower())
+
+
+def _get_field(normalized_row: dict, key: str) -> str:
+    for alias in _APOLLO_ALIASES[key]:
+        val = normalized_row.get(alias, "")
+        if val and val.strip():
+            return val.strip()
+    return ""
+
+
 # ── Debug ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/debug/page")
@@ -80,20 +116,32 @@ async def debug_page():
     return {"current_url": current_url, "link_count": len(hrefs), "links": hrefs[:20]}
 
 
+@app.get("/api/debug/goto")
+async def debug_goto(url: str):
+    """Navigate the bot's live browser to an arbitrary URL, for live diagnostics
+    (e.g. inspect a specific profile that misbehaved)."""
+    bot = await get_bot()
+    async with bot._page_lock:
+        await bot._page.goto(url, wait_until="domcontentloaded")
+        await asyncio.sleep(3)
+        return {"current_url": bot._page.url}
+
+
 @app.get("/api/debug/buttons")
 async def debug_buttons():
     """Dump all buttons on the current Chromium page."""
     bot = await get_bot()
-    buttons = await bot._page.evaluate("""() => {
-        const btns = document.querySelectorAll('button, div[role="button"], a[role="button"]');
-        return Array.from(btns).map(b => ({
-            tag: b.tagName,
-            label: b.getAttribute('aria-label') || '',
-            text: b.innerText.trim().slice(0, 60),
-            visible: b.offsetParent !== null
-        })).filter(b => b.label || b.text);
-    }""")
-    return {"url": bot._page.url, "buttons": buttons}
+    async with bot._page_lock:
+        buttons = await bot._page.evaluate("""() => {
+            const btns = document.querySelectorAll('button, div[role="button"], a[role="button"]');
+            return Array.from(btns).map(b => ({
+                tag: b.tagName,
+                label: b.getAttribute('aria-label') || '',
+                text: b.innerText.trim().slice(0, 60),
+                visible: b.offsetParent !== null
+            })).filter(b => b.label || b.text);
+        }""")
+        return {"url": bot._page.url, "buttons": buttons}
 
 
 @app.get("/api/debug/extract")
@@ -154,6 +202,82 @@ async def search_leads(filters: SearchFilters):
         await db.commit()
 
     return JSONResponse(content={"count": len(leads), "leads": leads})
+
+
+@app.post("/api/leads/upload")
+async def upload_leads(file: UploadFile = File(...)):
+    """Bulk-import leads from an Apollo (or similar) CSV export.
+
+    Rows without a LinkedIn URL are skipped (the leads table is keyed on
+    linkedin_url). If a row's LinkedIn URL already exists as a lead (e.g.
+    found earlier via Search), we only backfill its email if missing —
+    status/history on the existing lead is left untouched.
+    """
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(400, "Could not read any columns from this file — is it a CSV export?")
+
+    imported = 0
+    updated_email = 0
+    skipped_duplicate = 0
+    skipped_no_url = 0
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        for row in reader:
+            normalized_row = {_normalize_header(k): (v or "") for k, v in row.items() if k}
+
+            linkedin_url = _get_field(normalized_row, "linkedin_url")
+            if not linkedin_url:
+                skipped_no_url += 1
+                continue
+
+            name = _get_field(normalized_row, "full_name")
+            if not name:
+                name = f"{_get_field(normalized_row, 'first_name')} {_get_field(normalized_row, 'last_name')}".strip()
+
+            email = _get_field(normalized_row, "email")
+            headline = _get_field(normalized_row, "title")
+            company = _get_field(normalized_row, "company")
+            location = _get_field(normalized_row, "location")
+            if not location:
+                parts = [_get_field(normalized_row, k) for k in ("city", "state", "country")]
+                location = ", ".join(p for p in parts if p)
+
+            async with db.execute(
+                "SELECT id, email FROM leads WHERE linkedin_url=?", (linkedin_url,)
+            ) as cur:
+                existing = await cur.fetchone()
+
+            if existing:
+                lead_id, existing_email = existing
+                if email and not existing_email:
+                    await db.execute("UPDATE leads SET email=? WHERE id=?", (email, lead_id))
+                    updated_email += 1
+                else:
+                    skipped_duplicate += 1
+            else:
+                await db.execute(
+                    """INSERT INTO leads
+                       (linkedin_url, name, headline, company, location, email, status, source)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    (linkedin_url, name, headline, company, location, email, "pending", "apollo"),
+                )
+                imported += 1
+
+        await db.commit()
+
+    return {
+        "imported": imported,
+        "updated_email": updated_email,
+        "skipped_duplicate": skipped_duplicate,
+        "skipped_no_linkedin_url": skipped_no_url,
+    }
 
 
 # ── Leads ────────────────────────────────────────────────────────────────────
@@ -273,7 +397,16 @@ async def get_stats():
 
 @app.get("/", response_class=HTMLResponse)
 async def frontend():
-    return FileResponse("static/index.html")
+    # Safari (unlike Chrome) will happily serve a stale cached copy of this
+    # page even on a brand-new tab/window, since we never told it not to.
+    # Force no caching so every load always gets the current file.
+    return FileResponse(
+        "static/index.html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 if __name__ == "__main__":

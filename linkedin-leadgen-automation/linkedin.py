@@ -36,6 +36,18 @@ class LinkedInBot:
         self._browser = None
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
+        # All methods that navigate/interact with self._page share ONE
+        # Playwright page (one visible browser tab). Without this lock, the
+        # dashboard's periodic login-check (every 60s, and on every page
+        # load) can call is_logged_in() — which navigates to /feed/ — at the
+        # same moment a real action (search/connect/message) is mid-flight
+        # on a profile page, yanking it away underneath that action. This
+        # was confirmed live: a profile visit that should show a "Connect"
+        # button intermittently got misread as "no Connect button found"
+        # because the page had been navigated to /feed/ mid-check. Every
+        # public method that touches self._page acquires this lock first so
+        # actions are serialized instead of racing each other.
+        self._page_lock = asyncio.Lock()
 
     async def start(self):
         self._playwright = await async_playwright().start()
@@ -70,11 +82,19 @@ class LinkedInBot:
             COOKIES_PATH.write_text(json.dumps(cookies, indent=2))
 
     async def is_logged_in(self) -> bool:
+        async with self._page_lock:
+            return await self._is_logged_in_locked()
+
+    async def _is_logged_in_locked(self) -> bool:
         await self._page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded")
         await short_delay()
         return "feed" in self._page.url
 
     async def search_people(self, filters: dict, max_results: int = 50) -> list[dict]:
+        async with self._page_lock:
+            return await self._search_people_locked(filters, max_results)
+
+    async def _search_people_locked(self, filters: dict, max_results: int = 50) -> list[dict]:
         """
         Search LinkedIn people with filters:
           keywords, title, company, location, industry, network (F=1st, S=2nd, O=3rd+)
@@ -277,6 +297,10 @@ class LinkedInBot:
 
 
     async def send_connection_request(self, linkedin_url: str, note: str = "") -> bool:
+        async with self._page_lock:
+            return await self._send_connection_request_locked(linkedin_url, note)
+
+    async def _send_connection_request_locked(self, linkedin_url: str, note: str = "") -> bool:
         """
         Visit a profile and click Connect. Optionally add a note (max 300 chars).
         Returns True on success.
@@ -424,13 +448,34 @@ class LinkedInBot:
                     clicked = None
 
             if not clicked:
+                # Before giving up, check whether this profile already shows
+                # "Pending" — meaning we (or the user, manually) already sent a
+                # request earlier. That's a different situation from a genuine
+                # Follow-only/no-button profile: it shouldn't be logged as a
+                # "skip", it should be reconciled as already-requested.
+                is_pending = await self._page.evaluate("""() => {
+                    const aside = document.querySelector('aside');
+                    const main = document.querySelector('main');
+                    const h1 = main ? main.querySelector('h1') : null;
+                    const introCard = h1 ? (h1.closest('section') || main) : main;
+                    const root = introCard || document;
+                    const nodes = Array.from(root.querySelectorAll('span, div, li, button'));
+                    return nodes.some(el => {
+                        if (aside && aside.contains(el)) return false;
+                        if (el.childElementCount > 0) return false;
+                        return el.textContent.trim() === 'Pending';
+                    });
+                }""")
+                if is_pending:
+                    logger.info(f"Profile already shows 'Pending' for {linkedin_url} — request was already sent previously")
+                    return "already_pending"
                 logger.warning(f"No Connect button found for {linkedin_url} — profile may use Follow-only mode")
                 return False
 
             logger.info(f"Clicked: {clicked}")
 
             # Wait up to 10s for "Send without a note" button, then click it
-            sent = None
+            # if it's actually enabled.
             try:
                 await self._page.wait_for_selector(
                     'button[aria-label="Send without a note"]',
@@ -438,23 +483,77 @@ class LinkedInBot:
                 )
                 send_btn = await self._page.query_selector('button[aria-label="Send without a note"]')
                 if send_btn:
-                    await send_btn.click()
-                    sent = 'sent_without_note'
+                    # LinkedIn sometimes shows a variant of this same dialog that
+                    # requires typing the person's email to "verify you know them"
+                    # before allowing the invite — in that case "Send without a
+                    # note" is present but disabled, and clicking it is a no-op.
+                    if await send_btn.is_disabled():
+                        logger.warning(f"'Send without a note' is disabled for {linkedin_url} — likely blocked by an email-verification gate")
+                    else:
+                        await send_btn.click()
             except Exception:
                 # Timeout — dialog never appeared, request may have gone directly
                 pass
 
-            if sent:
-                logger.info(f"Connection request sent to {linkedin_url} (result: '{sent}')")
+            await asyncio.sleep(2)
+
+            # Dismiss any lingering dialog (e.g. the email-verification gate)
+            # so it doesn't block subsequent actions on this shared page.
+            try:
+                close_btn = await self._page.query_selector(
+                    '[role="dialog"] button[aria-label="Dismiss"], .artdeco-modal button[aria-label="Dismiss"]'
+                )
+                if close_btn:
+                    await close_btn.click()
+                    await asyncio.sleep(1)
+            except Exception:
+                pass
+
+            # Don't trust any of the above heuristics on their own — LinkedIn's
+            # dialog markup/timing for the email-verification gate has proven
+            # inconsistent across attempts (sometimes no recognized dialog is
+            # left to detect, even though the request never actually went
+            # through). The only reliable signal is the profile itself: reload
+            # it and check whether the intro card now shows "Pending" — the
+            # exact same check already used above to detect a pre-existing
+            # request. Only report success if this is confirmed.
+            await self._page.goto(linkedin_url, wait_until="domcontentloaded")
+            await asyncio.sleep(3)
+            await self._page.evaluate("window.scrollTo(0, 0)")
+            await asyncio.sleep(1)
+
+            confirmed_pending = await self._page.evaluate("""() => {
+                const aside = document.querySelector('aside');
+                const main = document.querySelector('main');
+                const h1 = main ? main.querySelector('h1') : null;
+                const introCard = h1 ? (h1.closest('section') || main) : main;
+                const root = introCard || document;
+                const nodes = Array.from(root.querySelectorAll('span, div, li, button'));
+                return nodes.some(el => {
+                    if (aside && aside.contains(el)) return false;
+                    if (el.childElementCount > 0) return false;
+                    return el.textContent.trim() === 'Pending';
+                });
+            }""")
+
+            if confirmed_pending:
+                logger.info(f"Confirmed 'Pending' on {linkedin_url} after connect attempt — request genuinely sent")
                 return True
 
-            logger.info(f"Connection request sent directly (no dialog) to {linkedin_url}")
-            return True
+            logger.warning(
+                f"Profile for {linkedin_url} does NOT show 'Pending' after connect attempt — "
+                f"request was likely blocked (e.g. an email-verification gate), not actually sent"
+            )
+            return "blocked_by_dialog"
         except Exception as e:
             logger.error(f"Error sending connection request: {e}")
             return False
 
     async def send_message(self, linkedin_url: str, message: str) -> bool:
+        async with self._page_lock:
+            return await self._send_message_locked(linkedin_url, message)
+
+    async def _send_message_locked(self, linkedin_url: str, message: str) -> bool:
         """Send a DM to a connection."""
         try:
             await self._page.goto(linkedin_url, wait_until="domcontentloaded")
@@ -546,6 +645,10 @@ class LinkedInBot:
             return False
 
     async def check_new_connections(self) -> list[str]:
+        async with self._page_lock:
+            return await self._check_new_connections_locked()
+
+    async def _check_new_connections_locked(self) -> list[str]:
         """
         Check the My Network page for recently accepted connections.
         Returns list of profile URLs.

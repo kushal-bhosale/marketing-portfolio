@@ -5,8 +5,9 @@ A lightweight Phantombuster alternative built for personal use. Automates Linked
 ## What it does
 
 1. **Search for leads** — Filter by job title, keywords, location, and network degree (1st, 2nd, 3rd+)
-2. **Queue connection requests** — Select leads from the list and schedule connection requests with human-like delays
-3. **Auto follow-up** — Detects when someone accepts your request and sends a personalised follow-up message automatically
+2. **Import from Apollo** — Bulk-upload an Apollo contact-list CSV export (matched by LinkedIn URL) to feed leads sourced outside LinkedIn search into the same pipeline
+3. **Queue connection requests** — Select leads from the list and schedule connection requests with human-like delays
+4. **Auto follow-up** — Detects when someone accepts your request and sends a personalised follow-up message automatically
 
 ## Stack
 
